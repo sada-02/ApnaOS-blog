@@ -1,36 +1,58 @@
+<!-- index.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ApnaOS Blog</title>
+  <title>ApnaOS – Home</title>
   <link rel="stylesheet" href="css/style.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
 </head>
 <body>
   <div class="sidebar">
     <a href="index.html" class="active"><i class="fas fa-house"></i> Home</a>
+    <a href="kernel.html"><i class="fas fa-cogs"></i> Kernel</a>
+    <a href="process.html"><i class="fas fa-tasks"></i> Process</a>
+    <a href="syscalls.html"><i class="fas fa-code"></i> System Calls</a>
+    <a href="cli.html"><i class="fas fa-terminal"></i> CLI</a>
+    <a href="interrupts.html"><i class="fas fa-bolt"></i> Interrupts</a>
     <a href="memory.html"><i class="fas fa-microchip"></i> Memory</a>
-    <a href="scheduler.html"><i class="fas fa-clock"></i> Scheduler</a>
-    <a href="files.html"><i class="fas fa-folder"></i> File Management</a>
+    <a href="filesystem.html"><i class="fas fa-folder"></i> File System</a>
   </div>
 
   <div class="container">
     <header class="site-header">
       <h1>ApnaOS Development Blog</h1>
-      <p>Tracking the journey from bootloader to kernel</p>
+      <p>Tracking the journey from bootloader to kernel and beyond.</p>
     </header>
+
     <main>
-      <ul class="post-list">
-        <li>
-          <a href="posts/post.html" class="post-title">Initial Boot Success & Kernel Print</a>
-          <div class="post-meta">April 18, 2025</div>
-          <p>We got the first boot and basic kernel printing working. Here's how we did it...</p>
-        </li>
-        <!-- Add more posts as needed -->
-      </ul>
+      <section id="recent-posts">
+        <h2>Recent Posts</h2>
+        <ul id="post-list" class="post-list"></ul>
+      </section>
     </main>
+
     <footer>© 2025 ApnaOS Team</footer>
   </div>
+
+  <script>
+    fetch('posts.json')
+      .then(response => response.json())
+      .then(posts => {
+        const ul = document.getElementById('post-list');
+        posts.forEach(p => {
+          const li = document.createElement('li');
+          li.innerHTML = `
+            <a href="${p.url}" class="post-title">${p.title}</a>
+            <div class="post-meta">${p.date}</div>
+            <p>${p.excerpt}</p>
+          `;
+          ul.appendChild(li);
+        });
+      })
+      .catch(err => console.error('Failed to load posts.json:', err));
+  </script>
+
 </body>
 </html>
