@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
 </head>
 <body>
+  <!-- Left Navigation Sidebar -->
   <div class="sidebar">
     <a href="index.html" class="active"><i class="fas fa-house"></i> Home</a>
     <a href="kernel.html"><i class="fas fa-cogs"></i> Kernel</a>
@@ -19,19 +20,32 @@
     <a href="filesystem.html"><i class="fas fa-folder"></i> File System</a>
   </div>
 
+  <!-- Main Container -->
   <div class="container">
     <header class="site-header">
       <h1>ApnaOS</h1>
-      <p>A minimalistic OS in C with memory, process, and file management.</p>
+      <p>A minimalistic OS in C performing memory, process, and file management to teach core operating-system concepts.</p>
     </header>
 
-    <!-- New flex container for main + aside -->
+    <!-- Three-column layout: main description + recent posts aside -->
     <div class="content">
+      <!-- Center: Project Description -->
       <main>
-        <!-- Your homepage intro/content -->
-        <p>Welcome to our development blog! Explore the sections via the sidebar.</p>
+        <section id="project-description">
+          <h2>About ApnaOS</h2>
+          <p>ApnaOS is a teaching operating system written from scratch in C. It boots via GRUB, initializes its own kernel, and provides core services that every OS needs.</p>
+          <ul>
+            <li><strong>Kernel Initialization:</strong> Handles bootloader handoff, sets up segment descriptors, and enters protected mode.</li>
+            <li><strong>Process Management:</strong> Implements a round-robin scheduler and context switching between multiple processes.</li>
+            <li><strong>Memory Management:</strong> Uses paging for virtual memory, with simple page allocation and free lists.</li>
+            <li><strong>File System:</strong> A basic VFS layer supporting file creation, deletion, and read/write operations.</li>
+            <li><strong>Shell (CLI):</strong> A command-line interface for launching programs and interacting with the system.</li>
+          </ul>
+          <p>Each subsystem is modular, making it easy to extend features or swap in new algorithms as you learn.</p>
+        </section>
       </main>
 
+      <!-- Right: Recent Posts Sidebar -->
       <aside id="recent-posts">
         <h2>Recent Posts</h2>
         <ul id="post-list" class="post-list"></ul>
@@ -41,6 +55,7 @@
     <footer>© 2025 ApnaOS Team</footer>
   </div>
 
+  <!-- Dynamic Posts Loader -->
   <script>
     fetch('posts.json')
       .then(response => response.json())
