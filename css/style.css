@@ -11,6 +11,7 @@
   --spacing: 1.5rem;
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
+
 body {
   font-family: var(--font-serif);
   background: var(--color-bg);
@@ -18,10 +19,12 @@ body {
   line-height: 1.6;
   display: flex;
 }
+
 a {
   color: var(--color-link);
   text-decoration: none;
 }
+
 a:hover { text-decoration: underline; }
 
 .sidebar {
@@ -35,11 +38,13 @@ a:hover { text-decoration: underline; }
   border-right: 1px solid #ddd;
   font-family: var(--font-sans);
 }
+
 .sidebar a {
   display: block;
   margin-bottom: 1rem;
   font-size: 1rem;
 }
+
 .sidebar a i {
   margin-right: 0.5rem;
 }
@@ -61,21 +66,88 @@ a:hover { text-decoration: underline; }
   font-size: 2rem;
   margin-bottom: 0.25rem;
 }
+
 .site-header p {
   color: var(--color-meta);
   font-size: 0.9rem;
 }
+
 .post-list { list-style: none; }
+
 .post-list li { margin-bottom: var(--spacing); }
+
 .post-title { font-size: 1.5rem; }
+
 .post-meta {
   color: var(--color-meta);
   font-size: 0.85rem;
   margin-bottom: 0.5rem;
 }
+
 footer {
   text-align: center;
   margin-top: calc(var(--spacing) * 2);
   color: var(--color-meta);
   font-size: 0.85rem;
+}
+
+.container .content {
+display: flex;
+gap: 2rem;
+align-items: flex-start;
+}
+
+.container .content main {
+flex: 3;
+}
+
+.container .content aside#recent-posts {
+flex: 1;
+background: #f9f9f9;
+padding: 1rem;
+border-radius: 8px;
+box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.container .content aside#recent-posts .post-list li {
+margin-bottom: 1rem;
+padding-bottom: 0.5rem;
+border-bottom: 1px solid #ddd;
+}
+
+.container .content aside#recent-posts .post-list li:last-child {
+border-bottom: none;
+}
+
+.container .content aside#recent-posts .post-list .post-title {
+display: block;
+font-weight: 600;
+margin-bottom: 0.25rem;
+}
+
+.container .content aside#recent-posts .post-list .post-title:hover {
+color: #0066cc;
+text-decoration: underline;
+}
+
+.container .content aside#recent-posts .post-meta {
+font-size: 0.85rem;
+color: #666;
+margin-bottom: 0.25rem;
+}
+
+.container .content aside#recent-posts .post-list p {
+font-size: 0.9rem;
+color: #333;
+margin: 0;
+}
+
+@media (max-width: 768px) {
+    .container .content {
+        flex-direction: column;
+    }
+
+    .container .content aside#recent-posts {
+        margin-top: 1.5rem;
+    }
 }
