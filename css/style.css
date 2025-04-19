@@ -1,56 +1,81 @@
+@import url('https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css');
+
 :root {
---font-sans: Arial, sans-serif;
---font-serif: Georgia, serif;
---color-text: #333;
---color-bg: #fff;
---color-link: #0066cc;
---color-meta: #777;
---max-width: 760px;
---spacing: 1.5rem;
+  --font-sans: Arial, sans-serif;
+  --font-serif: Georgia, serif;
+  --color-text: #333;
+  --color-bg: #fff;
+  --color-link: #0066cc;
+  --color-meta: #777;
+  --max-width: 760px;
+  --spacing: 1.5rem;
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
-font-family: var(--font-serif);
-background: var(--color-bg);
-color: var(--color-text);
-line-height: 1.6;
+  font-family: var(--font-serif);
+  background: var(--color-bg);
+  color: var(--color-text);
+  line-height: 1.6;
+  display: flex;
 }
 a {
-color: var(--color-link);
-text-decoration: none;
+  color: var(--color-link);
+  text-decoration: none;
 }
 a:hover { text-decoration: underline; }
+
+.sidebar {
+  width: 220px;
+  padding: var(--spacing);
+  position: fixed;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: #f9f9f9;
+  border-right: 1px solid #ddd;
+  font-family: var(--font-sans);
+}
+.sidebar a {
+  display: block;
+  margin-bottom: 1rem;
+  font-size: 1rem;
+}
+.sidebar a i {
+  margin-right: 0.5rem;
+}
+.sidebar a.active {
+  font-weight: bold;
+  color: #000;
+  background: #e0e0e0;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+}
+
 .container {
-max-width: var(--max-width);
-margin: auto;
-padding: var(--spacing);
+  max-width: var(--max-width);
+  margin-left: 240px;
+  padding: var(--spacing);
 }
-nav {
-font-family: var(--font-sans);
-margin-bottom: var(--spacing);
-display: flex;
-justify-content: space-between;
-}
-nav a { margin-left: 1rem; }
+
 .site-header h1 {
-font-size: 2rem;
-margin-bottom: 0.25rem;
+  font-size: 2rem;
+  margin-bottom: 0.25rem;
 }
 .site-header p {
-color: var(--color-meta);
-font-size: 0.9rem;
+  color: var(--color-meta);
+  font-size: 0.9rem;
 }
 .post-list { list-style: none; }
 .post-list li { margin-bottom: var(--spacing); }
 .post-title { font-size: 1.5rem; }
 .post-meta {
-color: var(--color-meta);
-font-size: 0.85rem;
-margin-bottom: 0.5rem;
+  color: var(--color-meta);
+  font-size: 0.85rem;
+  margin-bottom: 0.5rem;
 }
 footer {
-text-align: center;
-margin-top: calc(var(--spacing) * 2);
-color: var(--color-meta);
-font-size: 0.85rem;
+  text-align: center;
+  margin-top: calc(var(--spacing) * 2);
+  color: var(--color-meta);
+  font-size: 0.85rem;
 }

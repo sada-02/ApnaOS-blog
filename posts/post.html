@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Initial Boot Success | ApnaOS Blog</title>
+  <link rel="stylesheet" href="../css/style.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+</head>
+<body>
+  <div class="sidebar">
+    <a href="../index.html"><i class="fas fa-house"></i> Home</a>
+    <a href="../memory.html"><i class="fas fa-microchip"></i> Memory</a>
+    <a href="../scheduler.html"><i class="fas fa-clock"></i> Scheduler</a>
+    <a href="../files.html"><i class="fas fa-folder"></i> File Management</a>
+  </div>
+
+  <div class="container">
+    <header class="site-header">
+      <h1>Initial Boot & Kernel Print</h1>
+      <p class="post-meta">Posted on April 18, 2025</p>
+    </header>
+    <main>
+      <p>After days of debugging GRUB and linking issues, we finally saw our first text printed from the kernel!</p>
+      <p>The linker script was a pain, but here's a snippet that worked:</p>
+      <pre><code>SECTIONS {
+  . = 0x100000;
+  .text : { *(.text*) }
+  .rodata : { *(.rodata*) }
+  .data : { *(.data*) }
+  .bss : { *(.bss*) }
+}</code></pre>
+      <p>More technical breakdowns coming soon!</p>
+    </main>
+    <footer>© 2025 ApnaOS Team</footer>
+  </div>
+</body>
+</html>
