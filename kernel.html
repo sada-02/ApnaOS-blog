@@ -1,4 +1,3 @@
-<!-- kernel.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -6,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>ApnaOS – Kernel</title>
   <link rel="stylesheet" href="css/style.css" />
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
 </head>
 <body>
   <div class="sidebar">
@@ -22,13 +21,264 @@
 
   <div class="container">
     <header class="site-header">
-      <h1>Kernel Architecture</h1>
-      <p>Deep dive into bootloader, kernel initialization, and core subsystems.</p>
+      <h1>Kernel Architecture in ApnaOS</h1>
+      <p>A comprehensive, step-by-step guide through our kernel’s bootstrap, initialization, and core services.</p>
     </header>
+    
     <main>
-      <p>— Add your kernel design docs and code snippets here.</p>
+      <article>
+
+        <!-- Section 1: Introduction -->
+        <section>
+          <h2>1. Introduction</h2>
+          <p>
+            The kernel is the core of ApnaOS, responsible for managing hardware resources, providing abstractions (memory, processes, files), and serving as the runtime for all processes. In this post, we’ll explore how the kernel boots, sets up vital CPU and memory structures, initializes subsystems, and launches the interactive CLI or scheduled processes.
+          </p>
+        </section>
+
+        <!-- Section 2: Multiboot Header -->
+        <section>
+          <h2>2. Multiboot Header</h2>
+          <p>
+            ApnaOS is loaded by a Multiboot-compliant bootloader (e.g., GRUB). The kernel binary must include a special header within the first 8 KB to signal compatibility and request boot information.
+          </p>
+          <pre><code>__attribute__((section(".multiboot")))
+__attribute__((used))
+static const struct {
+    uint32_t magic;      // Multiboot magic number: 0x1BADB002
+    uint32_t flags;      // Flags: alignment, memory info, video info
+    uint32_t checksum;   // checksum = -(magic + flags)
+} multiboot_header = {
+    0x1BADB002,
+    0x00010003,
+    -(0x1BADB002 + 0x00010003)
+};
+</code></pre>
+          <p>
+            <strong>Why:</strong> The magic confirms to GRUB this kernel understands the Multiboot protocol. Flags request memory map and video mode info. The checksum ensures header integrity.
+          </p>
+        </section>
+
+        <!-- Section 3: Kernel Entry Point -->
+        <section>
+          <h2>3. Kernel Entry Point</h2>
+          <p>
+            After the bootloader loads the kernel into memory and passes a pointer to the Multiboot info structure, execution jumps to <code>kernel_main</code>:
+          </p>
+          <pre><code>void kernel_main(uint32_t multiboot_info) {
+    serial_init();
+    debug_print("Entering kernel_main");
+
+    memory_init(multiboot_info);
+    debug_print("Memory manager initialized");
+
+    create_file_system();
+    debug_print("File system initialized");
+
+    gdt_install();
+    debug_print("GDT installed");
+
+    pic_remap();
+    idt_install();
+    irq_install();
+    debug_print("Interrupt controllers configured");
+
+    init_keyboard();
+    debug_print("Keyboard driver initialized");
+
+    // Enable interrupts globally
+    asm volatile("sti");
+
+    init_syscalls();
+    debug_print("System calls interface ready");
+
+    init_process_management();
+    debug_print("Process scheduler ready");
+
+    // Enter command-line or scheduler loop
+    cli_loop();
+
+    // If CLI exits, halt the CPU
+    asm volatile("cli; hlt");
+}
+</code></pre>
+          <p>
+            <strong>Why:</strong> Each subsystem prints debugging info over serial and/or VGA to ease development. Finally, interrupts are enabled and the system enters an interactive shell.
+          </p>
+        </section>
+
+        <!-- Section 4: Debugging & I/O -->
+        <section>
+          <h2>4. Debugging & I/O Facilities</h2>
+          <p>
+            Early in boot, we configure serial and VGA text output to observe kernel behavior.
+          </p>
+          <h3>4.1 Serial Port</h3>
+          <pre><code>void serial_init() { /* configure COM1 for 115200 baud */ }
+void debug_print(const char *msg) {
+    serial_print(msg); serial_print("\r\n");
+}
+</code></pre>
+          <p>
+            Serial logging is critical when VGA might not yet be configured or when running under QEMU’s serial console.
+          </p>
+          <h3>4.2 VGA Text Mode</h3>
+          <pre><code>#define VGA_MEMORY ((volatile char*)0xB8000)
+void putchar(char c) { /* write character/attribute to VGA_MEMORY */ }
+void print_to_screen(const char *msg) { while(*msg) putchar(*msg++); }
+</code></pre>
+          <p>
+            VGA text mode allows on-screen output and scrolling without relying on serial.
+          </p>
+        </section>
+
+        <!-- Section 5: Memory Manager -->
+        <section>
+          <h2>5. Memory Management</h2>
+          <p>
+            We implement a simple bump allocator for kernel allocations. A 16 MB region is reserved; <code>kmalloc</code> bumps an offset to satisfy requests.
+          </p>
+          <pre><code>#define KERNEL_MEMORY_SIZE (16 * 1024 * 1024)
+static uint8_t kernel_memory[KERNEL_MEMORY_SIZE];
+static uint32_t kernel_memory_offset;
+
+void memory_init(uint32_t multiboot_info) {
+    // Zero and reset
+    memset(kernel_memory, 0, KERNEL_MEMORY_SIZE);
+    kernel_memory_offset = 0;
+}
+
+void* kmalloc(size_t size) {
+    // Allocate header + payload, align to 4 bytes
+    /* ... */
+}
+
+void kfree(void* ptr) {
+    // Mark header as free (no coalescing yet)
+}
+</code></pre>
+          <p>
+            <strong>Why:</strong> This provides dynamic memory to subsystems (keyboard buffers, process stacks) before introducing advanced allocators.
+          </p>
+        </section>
+
+        <!-- Section 6: File System -->
+        <section>
+          <h2>6. File System Initialization</h2>
+          <pre><code>void format_disk() {
+    sb.magic = 0x12345678;
+    sb.total_blocks = BLOCK_COUNT;
+    sb.free_blocks  = BLOCK_COUNT;
+    sb.block_size   = BLOCK_SIZE;
+    // Clear inodes, directory, and block_bitmap
+}
+
+void create_file_system() {
+    format_disk();
+}
+</code></pre>
+          <p>
+            A minimal in-memory VFS enables file commands in the CLI early in development.
+          </p>
+        </section>
+
+        <!-- Section 7: GDT & Protected Mode -->
+        <section>
+          <h2>7. GDT & Protected Mode Segmentation</h2>
+          <pre><code>void gdt_install() {
+    // Define null, code, and data segments; load GDTR
+}
+</code></pre>
+          <p>
+            Although we use a flat memory model, installing a GDT is required to switch into 32-bit protected mode and enforce ring-zero privileges.
+          </p>
+        </section>
+
+        <!-- Section 8: Interrupts & PIC -->
+        <section>
+          <h2>8. Interrupt Handling</h2>
+
+          <h3>8.1 PIC Remapping</h3>
+          <pre><code>void pic_remap() {
+    // Remap IRQs 0–15 to IDT entries 32–47
+}
+</code></pre>
+
+          <h3>8.2 IDT Installation</h3>
+          <pre><code>void idt_install() {
+    // Set IDT entries for ISRs and IRQs; load IDTR
+}
+
+typedef void (*isr_t)(void);
+isr_t interrupt_handlers[256];
+
+void irq_install() {
+    // Enable individual IRQ handlers for timer, keyboard, etc.
+}
+</code></pre>
+          <p>
+            Proper interrupt setup is crucial for timers (scheduling), keyboard input, and hardware drivers.
+          </p>
+        </section>
+
+        <!-- Section 9: Keyboard & CLI -->
+        <section>
+          <h2>9. Keyboard Driver & Command Line</h2>
+          <pre><code>void init_keyboard() {
+    // Install IRQ1 handler; initialize scan code translation
+}
+
+void cli_loop(void) {
+    char input[MAX_INPUT_LENGTH];
+    while (1) {
+        print_to_screen("CLI> ");
+        read_line(input, MAX_INPUT_LENGTH);
+        handle_command(input);
+    }
+}
+</code></pre>
+          <p>
+            The CLI provides commands for process creation (<code>process</code>), file operations (<code>mkfile</code>, <code>readfile</code>), and system introspection.
+          </p>
+        </section>
+
+        <!-- Section 10: System Calls & Processes -->
+        <section>
+          <h2>10. Syscalls & Process Scheduler</h2>
+          <p>
+            We initialize the system call interface and a simple priority-based scheduler before handing control to user tasks.
+          </p>
+          <pre><code>void init_syscalls(void) {
+    // Register trap gate for syscall interrupt
+}
+
+void init_process_management() {
+    // Initialize ready_queue, process_table, next_pid
+}
+</code></pre>
+        </section>
+
+        <!-- Section 11: Conclusion -->
+        <section>
+          <h2>11. Conclusion & Next Steps</h2>
+          <p>
+            This deep dive has covered how ApnaOS transitions from bootloader to a running kernel: parsing Multiboot info, setting up memory and I/O, configuring CPU structures, and enabling multitasking and filesystem access through the CLI. Future work includes:
+          </p>
+          <ul>
+            <li>Implementing paging and virtual memory.</li>
+            <li>Adding dynamic kernel heap allocators.</li>
+            <li>Extending the filesystem to persistent storage.</li>
+            <li>Developing user-mode drivers and IPC mechanisms.</li>
+            <li>Enhancing the CLI with scripting and pipelines.</li>
+          </ul>
+        </section>
+
+      </article>
     </main>
-    <footer>© 2025 ApnaOS Team</footer>
+    
+    <footer>
+      © 2025 ApnaOS Team
+    </footer>
   </div>
 </body>
 </html>
