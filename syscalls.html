@@ -1,4 +1,3 @@
-<!-- syscalls.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -6,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>ApnaOS – System Calls</title>
   <link rel="stylesheet" href="css/style.css" />
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
 </head>
 <body>
   <div class="sidebar">
@@ -22,13 +21,192 @@
 
   <div class="container">
     <header class="site-header">
-      <h1>System Call Interface</h1>
-      <p>Details on ABI, trap handling, and syscall dispatch.</p>
+      <h1>System Call Interface in ApnaOS</h1>
+      <p>From user-space invocation to kernel handling and back.</p>
     </header>
+
     <main>
-      <p>— List your implemented syscalls and argument conventions here.</p>
+      <article>
+
+        <!-- Conceptual Foundations -->
+        <section>
+          <h2>1. Conceptual Foundations</h2>
+          <p>
+            <strong>System calls</strong> provide a controlled interface for user-space applications to request privileged services from the kernel—such as process control, memory management, or I/O. A syscall transitions the CPU from <em>user mode</em> to <em>kernel mode</em> via a trap gate or software interrupt. The kernel then validates arguments, executes the corresponding routine, and returns results to the caller in registers (typically <code>EAX</code> for return values).
+          </p>
+          <p>
+            Key elements of a syscall mechanism include:
+            <ul>
+              <li><strong>Trap/ISR entry:</strong> A designated interrupt vector (e.g., <code>int 0x80</code>) or SYSENTER/SYSCALL instruction triggers a switch to kernel context.</li>
+              <li><strong>Argument passing:</strong> Registers or stack locations hold syscall numbers and parameters.</li>
+              <li><strong>Dispatch table:</strong> An array or switch statement maps numbers to handler functions.</li>
+              <li><strong>Error codes:</strong> Negative return values signal failure, while non-negative indicates success or a valid resource ID.</li>
+              <li><strong>Context preservation:</strong> The kernel saves the user-mode registers and stack pointer, and may switch to a kernel stack before invoking handlers.</li>
+            </ul>
+          </p>
+        </section>
+
+        <!-- Implementation Details -->
+        <section>
+          <h2>2. Implementation Details</h2>
+
+          <h3>2.1 Syscall Initialization</h3>
+          <p>
+            In <code>init_syscalls()</code>, the kernel sets up necessary interrupt descriptors and any syscall number tables. For simplicity, ApnaOS registers its handler for the designated syscall interrupt vector during IDT setup; here we simply confirm initialization:
+          </p>
+          <pre><code>void init_syscalls(void) {
+    debug_print("DEBUG: System calls initialized");
+    // Future: configure IDT entry for syscall gate
+}
+</code></pre>
+
+          <h3>2.2 Retrieving the Current Process</h3>
+          <p>
+            Handlers often need access to the calling process’s <code>PCB</code>. We provide a simple wrapper:
+          </p>
+          <pre><code>PCB* get_current_process(void) {
+    return current_process;
+}
+</code></pre>
+
+          <h3>2.3 Fork: Cloning a Process</h3>
+          <p>
+            <code>fork_syscall()</code> duplicates the calling process’s context:
+          </p>
+          <ol>
+            <li><strong>Capture return address & stack pointer:</strong> Inline assembly reads <code>EIP</code> and <code>EBP</code> locations from the user stack.</li>
+            <li><strong>Allocate a new <code>PCB</code>:</strong> Copy and adjust metadata (PID, parent link, priority).</li>
+            <li><strong>Copy user stack:</strong> Allocate a fresh 4 KB page, compute the current stack offset, and <code>copy_memory</code>.</li>
+            <li><strong>Duplicate page tables:</strong> If the parent uses paging (<code>cr3</code> non-zero), allocate a new page directory and <code>copy_page_tables</code>.</li>
+            <li><strong>Allocate kernel stack:</strong> Reserve kernel-mode stack space via <code>kmalloc</code>.</li>
+            <li><strong>Queue child process:</strong> Mark <code>STATE_READY</code> and enqueue; return child PID to parent.</li>
+          </ol>
+          <pre><code>int fork_syscall(void) {
+    // 1. Extract return address & stack pointer
+    __asm__ volatile(
+        "movl 4(%%ebp), %0\n\t"
+        "lea (%%ebp), %1\n\t"
+        : "=r" (return_addr), "=r" (stack_ptr)
+    );
+    // 2. Allocate child PCB and inherit metadata
+    PCB* parent = get_current_process();
+    PCB* child  = kmalloc(sizeof(PCB));
+    child->pid  = get_new_pid();
+    child->parent = parent;
+    child->priority = parent->priority;
+    // 3. User stack copy
+    uint32_t* base = parent->user_stack_base;
+    uint32_t offset = (uint32_t)parent->user_stack_ptr - (uint32_t)base;
+    uint32_t* child_base = kmalloc(4096);
+    copy_memory(child_base, base, 4096);
+    child->user_stack_base = child_base;
+    child->user_stack_ptr  = child_base + (offset/sizeof(uint32_t));
+    // 4. Page table duplication
+    if (parent->cr3) {
+        child->cr3 = (uint32_t)kmalloc(4096);
+        copy_page_tables(parent->cr3, child->cr3);
+    }
+    // 5. Kernel stack allocation
+    child->kernel_stack_base = kmalloc(KERNEL_STACK_SIZE);
+    child->kernel_stack_ptr  = child->kernel_stack_base + (KERNEL_STACK_SIZE/sizeof(uint32_t));
+    // 6. Ready & return
+    child->state = STATE_READY;
+    child->is_new_child = true;
+    enqueue_process(&ready_queue, child);
+    return child->pid;
+}
+</code></pre>
+
+          <h3>2.4 Wait: Reaping Zombie Children</h3>
+          <p>
+            The <code>wait_syscall()</code> suspends the parent until one of its children exits:
+          </p>
+          <ol>
+            <li><strong>Search for zombies:</strong> <code>find_zombie_child()</code> scans the <em>process_table</em> for children in <code>STATE_ZOMBIE</code>.</li>
+            <li><strong>Immediate return:</strong> If found, return its PID and free its <code>PCB</code>.</li>
+            <li><strong>Block parent:</strong> If none, set parent <code>STATE_BLOCKED</code> and invoke <code>yield_syscall()</code> to reschedule.</li>
+            <li><strong>Resume and re-check:</strong> Upon wake-up, scan again; return child PID or <code>-1</code> on failure.
+            </li>
+          </ol>
+          <pre><code>int wait_syscall(int* status) {
+    PCB* parent = get_current_process();
+    PCB* zombie;
+    // 1. Check existing zombies
+    zombie = find_zombie_child(parent);
+    if (zombie) {
+        if (status) *status = zombie->exit_status;
+        int pid = zombie->pid;
+        kfree(zombie);
+        return pid;
+    }
+    // 2. Block parent and yield
+    parent->state = STATE_BLOCKED;
+    yield_syscall();
+    // 3. Wake-up and re-scan
+    zombie = find_zombie_child(parent);
+    if (zombie) {
+        if (status) *status = zombie->exit_status;
+        int pid = zombie->pid;
+        kfree(zombie);
+        return pid;
+    }
+    return -1;
+}
+</code></pre>
+
+          <h3>2.5 Exit & Yield</h3>
+          <p>
+            <code>exit_syscall()</code> marks the calling process as a zombie and unblocks its parent if waiting. It then invokes <code>schedule()</code> to pick the next runnable process:
+          </p>
+          <pre><code>void exit_syscall(int status) {
+    PCB* proc = get_current_process();
+    proc->exit_status = status;
+    proc->state = STATE_ZOMBIE;
+    // Unblock parent
+    if (proc->parent && proc->parent->state == STATE_BLOCKED) {
+        proc->parent->state = STATE_READY;
+        enqueue_process(&ready_queue, proc->parent);
+    }
+    schedule(); // never returns
+}
+
+void yield_syscall(void) {
+    PCB* proc = get_current_process();
+    // Save user SP, switch to kernel stack, and schedule
+    __asm__ volatile("lea (%%ebp), %0" : "=r"(proc->user_stack_ptr));
+    __asm__ volatile("movl %0, %%esp" : : "r"(proc->kernel_stack_ptr));
+    schedule();
+}
+</code></pre>
+        </section>
+
+        <!-- Future Directions -->
+        <section>
+          <h2>3. Future Directions</h2>
+          <ul>
+            <li><strong>Argument validation:</strong> Securely copy arguments from user space and validate pointers.</li>
+            <li><strong>Syscall table:</strong> Implement a dynamic dispatch table indexed by syscall numbers.</li>
+            <li><strong>64-bit registers:</strong> Extend to handle 64-bit arguments and return values.</li>
+            <li><strong>Error reporting:</strong> Integrate standard errno codes for rich diagnostics.</li>
+            <li><strong>Performance:</strong> Use SYSENTER/SYSCALL for faster transitions on x86 architectures.</li>
+          </ul>
+        </section>
+
+        <!-- Conclusion -->
+        <section>
+          <h2>4. Conclusion</h2>
+          <p>
+            This deep dive into ApnaOS’s system call layer illustrates how user-space programs request kernel services, how the kernel safely switches context,
+            and manages process lifecycle events like fork, wait, and exit. These primitives form the backbone for building higher-level OS features.
+          </p>
+        </section>
+
+      </article>
     </main>
-    <footer>© 2025 ApnaOS Team</footer>
+
+    <footer>
+      © 2025 ApnaOS Team
+    </footer>
   </div>
 </body>
 </html>
