@@ -22,140 +22,154 @@
   <div class="container">
     <header class="site-header">
       <h1>Memory Management in ApnaOS</h1>
-      <p>An in-depth look at our kernel’s allocation, deallocation, and paging mechanisms.</p>
+      <p>Exploring both the theoretical foundations and the detailed implementation of our kernel's memory subsystem.</p>
     </header>
 
     <main>
       <article>
+
+        <!-- Conceptual Foundations -->
         <section>
-          <h2>1. Overview</h2>
+          <h2>1. Conceptual Foundations</h2>
           <p>
-            Memory management is a cornerstone of any operating system. In ApnaOS, we start with a simple <strong>bump allocator</strong> for kernel-space requests,
-            eventually paving the way for more advanced strategies like free lists or buddy allocation. This post walks through the core functions
-            <code>memory_init</code>, <code>kmalloc</code>, <code>kfree</code>, and our page-copy routines.
+            At the heart of ApnaOS’s memory management lies a <strong>bump allocator</strong> (also known as a linear or stack allocator). This strategy reserves a contiguous region of memory and serves allocation requests by simply advancing a pointer (the “bump” pointer), without immediately reclaiming freed blocks. While extremely fast—requiring only pointer arithmetic per allocation—it does not handle fragmentation or reuse freed space.
+          </p>
+          <p>
+            To keep track of individual allocations, each block is prefixed with a small <code>memory_block_t</code> header storing metadata:<ul>
+            <li><strong>size</strong>: the length of the user-requested payload.</li>
+            <li><strong>is_free</strong>: a flag indicating whether the block has been released.</li>
+            </ul>
+          </p>
+          <p>
+            Beyond byte-level allocations, operating systems commonly allocate whole pages (4 KB) to manage paging structures and map virtual memory. ApnaOS wraps its bump allocator to serve page-granularity requests. Finally, when forking or cloning processes, the kernel must duplicate page tables. Although production-grade kernels use copy-on-write to delay copying, our initial design performs a straightforward memory copy of the page table root.
           </p>
         </section>
 
+        <!-- Implementation Details -->
         <section>
-          <h2>2. Initializing the Memory Pool</h2>
+          <h2>2. Implementation Details</h2>
+
+          <h3>2.1 Memory Pool Initialization</h3>
           <p>
-            We reserve a static 16 MB buffer in the kernel:
+            We reserve a static 16 MB buffer for kernel allocations:
           </p>
           <pre><code>#define KERNEL_MEMORY_SIZE (1024 * 1024 * 16)  // 16 MB
 static uint8_t kernel_memory[KERNEL_MEMORY_SIZE];
 static uint32_t kernel_memory_offset = 0;
-</code></pre>
+          </code></pre>
           <p>
-            On boot, <code>memory_init()</code> zeroes out this buffer and resets the offset:
+            During <code>memory_init()</code>, we clear this buffer to avoid exposing residual data and reset the bump pointer (<code>kernel_memory_offset</code>) to zero. This sets the stage for subsequent <code>kmalloc</code> calls to carve out memory from the start of the buffer.
           </p>
           <pre><code>void memory_init(uint32_t multiboot_info) {
-    // Clear all bytes to 0
+    // Zero-out the entire pool
     for (uint32_t i = 0; i < KERNEL_MEMORY_SIZE; i++) {
         kernel_memory[i] = 0;
     }
     kernel_memory_offset = 0;
     debug_print("DEBUG: Kernel memory initialized.");
-    // TODO: parse multiboot_info, set up paging, etc.
+    // Future: parse multiboot_info to build page tables, bitmap, etc.
 }
-</code></pre>
-        </section>
+          </code></pre>
 
-        <section>
-          <h2>3. Kernel Allocation: <code>kmalloc()</code></h2>
+          <h3>2.2 Byte-level Allocation (<code>kmalloc</code>)</h3>
           <p>
-            To satisfy allocation requests, we prepend a header (<code>memory_block_t</code>) before each chunk of memory:
+            To satisfy allocation requests of <code>size</code> bytes, <code>kmalloc</code> performs the following steps:
           </p>
-          <pre><code>typedef struct {
-    size_t size;    // requested size
-    int    is_free; // free flag (0 = in use, 1 = free)
-} memory_block_t;
-</code></pre>
-          <p>
-            The <code>kmalloc()</code> function computes the total size (header + payload), checks bounds, writes the header, and bumps the offset:
-          </p>
+          <ol>
+            <li><strong>Compute total size:</strong> add <code>sizeof(memory_block_t)</code> to accommodate the header.</li>
+            <li><strong>Bounds check:</strong> ensure <code>kernel_memory_offset + total</code> does not exceed our pool.</li>
+            <li><strong>Header placement:</strong> write <code>size</code> and clear <code>is_free</code> at the bump pointer.</li>
+            <li><strong>Offset bumping:</strong> advance by <code>total</code> bytes, then align <code>kernel_memory_offset</code> up to the next 4-byte boundary to satisfy alignment requirements on many architectures.</li>
+            <li><strong>Return payload:</strong> pointer arithmetic yields an address just past the header.
+            </li>
+          </ol>
           <pre><code>void* kmalloc(size_t size) {
     size_t total = size + sizeof(memory_block_t);
-    if (kernel_memory_offset + total > KERNEL_MEMORY_SIZE) return NULL;
-
-    // Place header at current offset
-    memory_block_t* block = (void*)&kernel_memory[kernel_memory_offset];
-    block->size    = size;
-    block->is_free = 0;
-
-    // Advance offset and align to 4 bytes
-    kernel_memory_offset += total;
-    if (kernel_memory_offset % 4 != 0) {
-        kernel_memory_offset += 4 - (kernel_memory_offset % 4);
+    if (kernel_memory_offset + total > KERNEL_MEMORY_SIZE) {
+        return NULL; // insufficient space
     }
 
-    // Return pointer to payload
+    // Place header at bump pointer
+    memory_block_t* block = (memory_block_t*)&kernel_memory[kernel_memory_offset];
+    block->size = size;
+    block->is_free = 0;
+
+    // Advance offset
+    kernel_memory_offset += total;
+    // Align to 4-byte boundary
+    if (kernel_memory_offset % 4 != 0) {
+        kernel_memory_offset += (4 - (kernel_memory_offset % 4));
+    }
+
+    // Return pointer to payload region
     return (void*)(block + 1);
 }
-</code></pre>
-        </section>
+          </code></pre>
 
-        <section>
-          <h2>4. Freeing Memory: <code>kfree()</code></h2>
+          <h3>2.3 Deallocation (<code>kfree</code>)</h3>
           <p>
-            Although our bump allocator cannot reclaim space immediately, we still maintain metadata to mark blocks as free for future
-            enhancements (such as coalescing or reuse). The <code>kfree()</code> function flips the <code>is_free</code> flag:
+            Although our bump allocator does not reclaim space on free, we update the header’s <code>is_free</code> flag for each block. This bookkeeping will enable a future free-list or coalescing allocator to identify available blocks:
           </p>
           <pre><code>void kfree(void* ptr) {
     if (!ptr) return;
-
-    // Retrieve header located just before payload
+    // Locate header immediately before payload
     memory_block_t* block = (memory_block_t*)((uint8_t*)ptr - sizeof(memory_block_t));
     block->is_free = 1;
     debug_print("DEBUG: Memory freed");
 }
-</code></pre>
-        </section>
+          </code></pre>
 
-        <section>
-          <h2>5. Page-level Operations</h2>
+          <h3>2.4 Page Allocation</h3>
           <p>
-            In addition to byte-level allocation, we often need full pages (4 KB). We wrap <code>kmalloc</code> for page requests:
+            For many kernel operations—especially paging and MMU setup—we need one or more contiguous 4 KB pages. We simply wrap <code>kmalloc</code> to request <code>num_pages * 4096</code> bytes:
           </p>
           <pre><code>void* allocate_pages(size_t num_pages) {
     return kmalloc(num_pages * 4096);
 }
-</code></pre>
+          </code></pre>
+
+          <h3>2.5 Page Table Copying</h3>
           <p>
-            When creating processes, we must clone page tables from a parent to child. As a placeholder, we use a simple memory copy:
+            Upon process creation, the kernel clones the parent’s page tables into the child’s address space. In production OSes, copy-on-write reduces copying overhead; here we perform a direct memory copy of the first-level page directory (4 KB):
           </p>
           <pre><code>void copy_page_tables(uint32_t parent_cr3, uint32_t child_cr3) {
-    // Note: real implementations iterate page directories/tables
+    // parent_cr3 and child_cr3 hold physical addresses of page directory
     copy_memory((void*)child_cr3, (void*)parent_cr3, 4096);
 }
 
 void copy_memory(void* dest, void* src, size_t size) {
-    uint8_t* d = dest;
-    uint8_t* s = src;
+    uint8_t* d = (uint8_t*)dest;
+    uint8_t* s = (uint8_t*)src;
     for (size_t i = 0; i < size; i++) {
         d[i] = s[i];
     }
 }
-</code></pre>
+          </code></pre>
         </section>
 
+        <!-- Future Directions -->
         <section>
-          <h2>6. Future Directions</h2>
+          <h2>3. Future Directions</h2>
+          <p>
+            Our starting point prioritizes simplicity and clarity, but the real power comes as we evolve towards:
+          </p>
           <ul>
-            <li><strong>Free-list allocator:</strong> Reuse freed blocks instead of infinite bumping.</li>
-            <li><strong>Buddy system:</strong> Efficiently split and coalesce power-of-two blocks.</li>
-            <li><strong>Lazy copying:</strong> Implement copy-on-write for page tables.</li>
-            <li><strong>Physical memory management:</strong> Track free frames and maintain bitmaps.</li>
+            <li><strong>Free-list allocator:</strong> Reuse freed blocks to mitigate wasted space and fragmentation.</li>
+            <li><strong>Buddy system:</strong> Efficiently split and merge power-of-two sized pages for predictable performance.</li>
+            <li><strong>Copy-on-write:</strong> Delay page table duplication until a write occurs, reducing overhead on process creation.</li>
+            <li><strong>Physical frame management:</strong> Maintain a bitmap to track free physical pages across the entire RAM.</li>
+            <li><strong>Virtual memory and swapping:</strong> Extend to support demand paging and swap to disk under memory pressure.</li>
           </ul>
         </section>
 
         <section>
-          <h2>7. Conclusion</h2>
+          <h2>4. Conclusion</h2>
           <p>
-            Our initial implementation lays down a simple yet functional foundation for kernel memory management in ApnaOS.
-            While limited, it allows safe allocation and basic bookkeeping. As ApnaOS grows, these primitives will evolve
-            into sophisticated allocators and full-featured paging mechanisms.
+            This dual-pronged exploration detailed both the theoretical concepts behind bump allocation and the precise ApnaOS implementation. While rudimentary,
+            these foundations offer a clear path to richer, more robust memory management as the project scales.
           </p>
         </section>
+
       </article>
     </main>
 
