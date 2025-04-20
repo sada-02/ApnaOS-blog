@@ -1,4 +1,3 @@
-<!-- interrupts.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -26,7 +25,147 @@
       <p>Architecture of IRQs, IDT entries, and interrupt service routines.</p>
     </header>
     <main>
-      <p>— Document your vector table, priority, and nesting behavior here.</p>
+      <article>
+
+        <!-- 1. Interrupt Architecture -->
+        <section>
+          <h2>1. Interrupt Architecture</h2>
+          <p>ApnaOS uses a modular interrupt management system inspired by x86 interrupt mechanisms. Key concepts:</p>
+          <ul>
+            <li><strong>Interrupt Descriptor Table (IDT):</strong> Maps interrupt vectors (0–255) to handler functions.</li>
+            <li><strong>Exceptions:</strong> Vectors 0–31 are reserved for CPU exceptions like divide-by-zero, page faults, and general protection faults.</li>
+            <li><strong>Programmable Interrupt Controller (PIC):</strong> Remapped to vectors 32–47 to avoid overlap with CPU exceptions.</li>
+            <li><strong>IRQ Mapping:</strong> Hardware interrupts (keyboard, timer, etc.) map to IRQ numbers remapped via PIC.</li>
+          </ul>
+        </section>
+
+        <!-- 2. IDT Setup -->
+        <section>
+          <h2>2. IDT Initialization</h2>
+          <p>The IDT is a table of descriptors where each entry tells the CPU how to handle a specific interrupt:</p>
+<pre><code>typedef struct {
+    uint16_t offset_low;
+    uint16_t selector;
+    uint8_t zero;
+    uint8_t type_attr;
+    uint16_t offset_high;
+} __attribute__((packed)) idt_entry_t;
+
+idt_entry_t idt[256];</code></pre>
+          <p>Each entry is initialized with a function pointer (handler) to the corresponding ISR:</p>
+<pre><code>void set_idt_gate(int n, uint32_t handler) {
+    idt[n].offset_low = handler & 0xFFFF;
+    idt[n].selector = 0x08; // Kernel code segment
+    idt[n].zero = 0;
+    idt[n].type_attr = 0x8E; // Present, ring 0, 32-bit interrupt gate
+    idt[n].offset_high = (handler >> 16) & 0xFFFF;
+}</code></pre>
+          <p>Finally, we load the IDT using the lidt instruction:</p>
+<pre><code>typedef struct {
+    uint16_t limit;
+    uint32_t base;
+} __attribute__((packed)) idt_ptr_t;
+
+idt_ptr_t idt_reg = {
+    .limit = sizeof(idt) - 1,
+    .base = (uint32_t)&idt
+};
+
+extern void load_idt(uint32_t);
+load_idt((uint32_t)&idt_reg);</code></pre>
+        </section>
+
+        <!-- 3. IRQ Remapping -->
+        <section>
+          <h2>3. IRQ Remapping</h2>
+          <p>By default, the PIC maps IRQs to vectors 0–15, overlapping with CPU exceptions. We remap them to 32–47 using:</p>
+<pre><code>#define PIC1 0x20
+#define PIC2 0xA0
+#define PIC1_COMMAND PIC1
+#define PIC1_DATA (PIC1+1)
+#define PIC2_COMMAND PIC2
+#define PIC2_DATA (PIC2+1)
+
+outb(PIC1_COMMAND, 0x11);
+outb(PIC2_COMMAND, 0x11);
+outb(PIC1_DATA, 0x20);
+outb(PIC2_DATA, 0x28);
+outb(PIC1_DATA, 0x04);
+outb(PIC2_DATA, 0x02);
+outb(PIC1_DATA, 0x01);
+outb(PIC2_DATA, 0x01);</code></pre>
+        </section>
+
+        <!-- 4. ISRs and IRQ Handlers -->
+        <section>
+          <h2>4. ISRs and IRQ Handlers</h2>
+          <p>ISRs are the core of interrupt handling. Assembly stubs handle low-level context saving and call C handlers:</p>
+<pre><code>isr_stub:
+    pusha
+    call isr_handler
+    popa
+    iret</code></pre>
+          <p>Example C handler for a timer interrupt:</p>
+<pre><code>__attribute__((interrupt)) void isr_timer(void* frame) {
+    tick_count++;
+    outb(0x20, 0x20); // Send EOI to PIC
+}</code></pre>
+          <p>Handlers must acknowledge the PIC and should execute quickly to avoid interrupt flooding.</p>
+        </section>
+
+        <!-- 5. Nesting and Prioritization -->
+        <section>
+          <h2>5. Nesting and Prioritization</h2>
+          <p>ApnaOS disables interrupts inside ISRs to avoid reentry issues. However, it can be extended to support nested interrupts with priority masking:</p>
+          <ul>
+            <li><strong>Nested Interrupts:</strong> Save full CPU state and re-enable interrupts temporarily inside handlers if needed.</li>
+            <li><strong>Priority:</strong> Configurable through PIC IMR (Interrupt Mask Register) or future support via APIC.</li>
+            <li><strong>Masking:</strong> Selectively enable/disable specific IRQ lines during critical sections.</li>
+          </ul>
+        </section>
+
+        <!-- 6. Software Interrupts -->
+        <section>
+          <h2>6. Software Interrupts</h2>
+          <p>These are manually invoked interrupts used for features like system calls or breakpoints:</p>
+<pre><code>int 0x80   ; Traditional syscall entry point
+int 0x03   ; Debugging breakpoint used by debuggers like GDB</code></pre>
+          <p>The handlers for these are also defined in the IDT and can be implemented for syscall dispatching or logging.</p>
+        </section>
+
+        <!-- 7. Debugging and Diagnostics -->
+        <section>
+          <h2>7. Debugging and Diagnostics</h2>
+          <ul>
+            <li><strong>Spurious IRQs:</strong> IRQ7 and IRQ15 can fire without real cause; OS checks interrupt status before handling.</li>
+            <li><strong>Double Faults:</strong> Occur when an exception occurs while servicing another; handled via a dedicated TSS and handler.</li>
+            <li><strong>Logging:</strong> ISR context includes instruction pointer, error code, and register snapshot for diagnostics.</li>
+            <li><strong>Trap Handlers:</strong> For exceptions like page faults, log CR2 and faulting address for debugging memory issues.</li>
+          </ul>
+        </section>
+
+        <!-- 8. Future Enhancements -->
+        <section>
+          <h2>8. Future Enhancements</h2>
+          <ul>
+            <li><strong>APIC Support:</strong> Migrate from legacy PIC to APIC for better scalability and inter-CPU interrupt management.</li>
+            <li><strong>Interrupt Prioritization:</strong> Use Local APIC to prioritize and vectorize interrupts efficiently.</li>
+            <li><strong>IRQ Sharing:</strong> Allow chaining multiple handlers for a single IRQ, useful for shared buses like PCI.</li>
+            <li><strong>Deferred Work:</strong> Offload lengthy processing from ISRs to bottom-half mechanisms or kernel threads.</li>
+          </ul>
+        </section>
+
+        <!-- 9. Conclusion -->
+        <section>
+          <h2>9. Conclusion</h2>
+          <p>
+            Interrupts are the backbone of real-time responsiveness in any OS. ApnaOS handles them with careful mapping,
+            structured dispatch, and a forward-looking design that anticipates multiprocessor and real-time use cases.
+            With planned enhancements like APIC, deferred handlers, and priority tuning, ApnaOS aims to scale efficiently.
+          </p>
+        </section>
+
+      </article>
     </main>
     <footer>© 2025 ApnaOS Team</footer>
   </div>
