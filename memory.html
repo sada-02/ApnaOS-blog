@@ -1,12 +1,11 @@
-<!-- memory.html (updated only sidebar & header) -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ApnaOS – Memory</title>
+  <title>ApnaOS – Memory Management</title>
   <link rel="stylesheet" href="css/style.css" />
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
 </head>
 <body>
   <div class="sidebar">
@@ -22,13 +21,147 @@
 
   <div class="container">
     <header class="site-header">
-      <h1>Memory Management</h1>
-      <p>Discuss paging, allocation, segmentation, etc.</p>
+      <h1>Memory Management in ApnaOS</h1>
+      <p>An in-depth look at our kernel’s allocation, deallocation, and paging mechanisms.</p>
     </header>
+
     <main>
-      <p>— Your memory subsystem design goes here.</p>
+      <article>
+        <section>
+          <h2>1. Overview</h2>
+          <p>
+            Memory management is a cornerstone of any operating system. In ApnaOS, we start with a simple <strong>bump allocator</strong> for kernel-space requests,
+            eventually paving the way for more advanced strategies like free lists or buddy allocation. This post walks through the core functions
+            <code>memory_init</code>, <code>kmalloc</code>, <code>kfree</code>, and our page-copy routines.
+          </p>
+        </section>
+
+        <section>
+          <h2>2. Initializing the Memory Pool</h2>
+          <p>
+            We reserve a static 16 MB buffer in the kernel:
+          </p>
+          <pre><code>#define KERNEL_MEMORY_SIZE (1024 * 1024 * 16)  // 16 MB
+static uint8_t kernel_memory[KERNEL_MEMORY_SIZE];
+static uint32_t kernel_memory_offset = 0;
+</code></pre>
+          <p>
+            On boot, <code>memory_init()</code> zeroes out this buffer and resets the offset:
+          </p>
+          <pre><code>void memory_init(uint32_t multiboot_info) {
+    // Clear all bytes to 0
+    for (uint32_t i = 0; i < KERNEL_MEMORY_SIZE; i++) {
+        kernel_memory[i] = 0;
+    }
+    kernel_memory_offset = 0;
+    debug_print("DEBUG: Kernel memory initialized.");
+    // TODO: parse multiboot_info, set up paging, etc.
+}
+</code></pre>
+        </section>
+
+        <section>
+          <h2>3. Kernel Allocation: <code>kmalloc()</code></h2>
+          <p>
+            To satisfy allocation requests, we prepend a header (<code>memory_block_t</code>) before each chunk of memory:
+          </p>
+          <pre><code>typedef struct {
+    size_t size;    // requested size
+    int    is_free; // free flag (0 = in use, 1 = free)
+} memory_block_t;
+</code></pre>
+          <p>
+            The <code>kmalloc()</code> function computes the total size (header + payload), checks bounds, writes the header, and bumps the offset:
+          </p>
+          <pre><code>void* kmalloc(size_t size) {
+    size_t total = size + sizeof(memory_block_t);
+    if (kernel_memory_offset + total > KERNEL_MEMORY_SIZE) return NULL;
+
+    // Place header at current offset
+    memory_block_t* block = (void*)&kernel_memory[kernel_memory_offset];
+    block->size    = size;
+    block->is_free = 0;
+
+    // Advance offset and align to 4 bytes
+    kernel_memory_offset += total;
+    if (kernel_memory_offset % 4 != 0) {
+        kernel_memory_offset += 4 - (kernel_memory_offset % 4);
+    }
+
+    // Return pointer to payload
+    return (void*)(block + 1);
+}
+</code></pre>
+        </section>
+
+        <section>
+          <h2>4. Freeing Memory: <code>kfree()</code></h2>
+          <p>
+            Although our bump allocator cannot reclaim space immediately, we still maintain metadata to mark blocks as free for future
+            enhancements (such as coalescing or reuse). The <code>kfree()</code> function flips the <code>is_free</code> flag:
+          </p>
+          <pre><code>void kfree(void* ptr) {
+    if (!ptr) return;
+
+    // Retrieve header located just before payload
+    memory_block_t* block = (memory_block_t*)((uint8_t*)ptr - sizeof(memory_block_t));
+    block->is_free = 1;
+    debug_print("DEBUG: Memory freed");
+}
+</code></pre>
+        </section>
+
+        <section>
+          <h2>5. Page-level Operations</h2>
+          <p>
+            In addition to byte-level allocation, we often need full pages (4 KB). We wrap <code>kmalloc</code> for page requests:
+          </p>
+          <pre><code>void* allocate_pages(size_t num_pages) {
+    return kmalloc(num_pages * 4096);
+}
+</code></pre>
+          <p>
+            When creating processes, we must clone page tables from a parent to child. As a placeholder, we use a simple memory copy:
+          </p>
+          <pre><code>void copy_page_tables(uint32_t parent_cr3, uint32_t child_cr3) {
+    // Note: real implementations iterate page directories/tables
+    copy_memory((void*)child_cr3, (void*)parent_cr3, 4096);
+}
+
+void copy_memory(void* dest, void* src, size_t size) {
+    uint8_t* d = dest;
+    uint8_t* s = src;
+    for (size_t i = 0; i < size; i++) {
+        d[i] = s[i];
+    }
+}
+</code></pre>
+        </section>
+
+        <section>
+          <h2>6. Future Directions</h2>
+          <ul>
+            <li><strong>Free-list allocator:</strong> Reuse freed blocks instead of infinite bumping.</li>
+            <li><strong>Buddy system:</strong> Efficiently split and coalesce power-of-two blocks.</li>
+            <li><strong>Lazy copying:</strong> Implement copy-on-write for page tables.</li>
+            <li><strong>Physical memory management:</strong> Track free frames and maintain bitmaps.</li>
+          </ul>
+        </section>
+
+        <section>
+          <h2>7. Conclusion</h2>
+          <p>
+            Our initial implementation lays down a simple yet functional foundation for kernel memory management in ApnaOS.
+            While limited, it allows safe allocation and basic bookkeeping. As ApnaOS grows, these primitives will evolve
+            into sophisticated allocators and full-featured paging mechanisms.
+          </p>
+        </section>
+      </article>
     </main>
-    <footer>© 2025 ApnaOS Team</footer>
+
+    <footer>
+      © 2025 ApnaOS Team
+    </footer>
   </div>
 </body>
 </html>
