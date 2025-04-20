@@ -1,4 +1,3 @@
-<!-- cli.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -6,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>ApnaOS – CLI</title>
   <link rel="stylesheet" href="css/style.css" />
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
 </head>
 <body>
   <div class="sidebar">
@@ -23,11 +22,204 @@
   <div class="container">
     <header class="site-header">
       <h1>Command‑Line Interface</h1>
-      <p>Design and features of your shell/terminal subsystem.</p>
+      <p>A deep dive into the design, parsing engine, and extensible built‑ins powering ApnaOS’s shell.</p>
     </header>
+
     <main>
-      <p>— Describe parsing logic, built‑ins, piping, redirection, etc.</p>
+      <article>
+
+        <!-- 1. Architecture Overview -->
+        <section>
+          <h2>1. Architecture Overview</h2>
+          <p>
+            The ApnaOS CLI runs within the kernel context, providing a minimal shell to interact with core subsystems. It consists of three layers:
+          </p>
+          <ol>
+            <li><strong>Driver Layer:</strong> Keyboard interrupt handler captures scancodes and translates them to ASCII.</li>
+            <li><strong>Input Engine:</strong> Buffers characters, handles line editing (backspace), and signals readiness.</li>
+            <li><strong>Parser & Dispatcher:</strong> Tokenizes the input line, matches commands, and invokes built‑in handlers.</li>
+          </ol>
+        </section>
+
+        <!-- 2. Keyboard to Buffer -->
+        <section>
+          <h2>2. Keyboard to Buffer</h2>
+          <p>
+            The IRQ-driven keyboard handler maps raw scancodes to ASCII using a lookup table. It implements rudimentary line editing:
+          </p>
+          <pre><code>void keyboard_handler() {
+    uint8_t sc = inb(KBD_DATA_PORT); // Read scancode
+    if (!(sc & 0x80)) {               // Key press
+        char c = scancode_to_ascii[sc];
+        switch (c) {
+        case '\n':                     // Enter key
+            input_buffer[idx] = '\0';
+            strcpy(input_line, input_buffer);
+            input_ready = 1;
+            print_to_screen("\n");
+            idx = 0;
+            break;
+        case '\b':                     // Backspace
+            if (idx > 0) {
+                idx--;
+                print_to_screen("\b \b");
+            }
+            break;
+        default:                       // Regular character
+            if (idx < BUFFER_SIZE - 1) {
+                input_buffer[idx++] = c;
+                print_to_screen((char[]){c,'\0'});
+            }
+        }
+    }
+}
+</code></pre>
+          <p>
+            This handler runs in interrupt context, so it must be fast and non-blocking. Only when Enter is pressed do we signal <code>input_ready</code> to wake the parser.
+          </p>
+        </section>
+
+        <!-- 3. Blocking Read -->
+        <section>
+          <h2>3. Blocking Read Engine</h2>
+          <p>
+            <code>read_line()</code> implements cooperative waiting: the CPU halts until new input arrives, conserving resources:
+          </p>
+          <pre><code>void read_line(char *buf, int max_len) {
+    while (!input_ready) {
+        asm volatile("hlt"); // Wait for next interrupt
+    }
+    // Copy and reset flag
+    for (int i = 0; i < max_len - 1 && input_line[i]; i++) {
+        buf[i] = input_line[i];
+    }
+    buf[max_len - 1] = '\0';
+    input_ready = 0;
+}
+</code></pre>
+        </section>
+
+        <!-- 4. Parsing & Tokenization -->
+        <section>
+          <h2>4. Parsing & Tokenization</h2>
+          <p>
+            We use a stateless <code>strtok()</code> to split on whitespace and preserve quoted strings if needed:
+          </p>
+          <pre><code>char *strtok(char *s, const char *delim) {
+    static char *p;
+    if (s) p = s;
+    if (!p) return NULL;
+    // Skip leading delimiters
+    while (*p && strchr(delim, *p)) p++;
+    if (!*p) return NULL;
+    char *tok = p;
+    // Find end of token
+    while (*p && !strchr(delim, *p)) p++;
+    if (*p) *p++ = '\0';
+    return tok;
+}
+</code></pre>
+          <p>
+            This simple approach can be extended for quoted strings or escape characters by enhancing the state machine.
+          </p>
+        </section>
+
+        <!-- 5. Command Dispatcher -->
+        <section>
+          <h2>5. Command Dispatcher (<code>cli_loop()</code>)</h2>
+          <p>
+            The heart of the shell: read, parse, dispatch. Errors or missing args trigger usage messages:
+          </p>
+          <pre><code>void cli_loop(void) {
+    char line[MAX_INPUT_LENGTH];
+    char *argv[MAX_ARGS];
+    while (1) {
+        print_to_screen("CLI> ");
+        read_line(line, sizeof(line));
+
+        // Tokenize into argv array
+        int argc = 0;
+        char *tok = strtok(line, " \t");
+        while (tok && argc < MAX_ARGS-1) {
+            argv[argc++] = tok;
+            tok = strtok(NULL, " \t");
+        }
+        argv[argc] = NULL;
+
+        if (argc == 0) continue;
+        // Dispatch table lookup
+        if      (strcmp(argv[0], "exit") == 0) break;
+        else if (strcmp(argv[0], "process") == 0) handle_process_cmd(argc, argv);
+        else if (strcmp(argv[0], "mkfile") == 0)  handle_mkfile(argc, argv);
+        else if (strcmp(argv[0], "readfile") == 0)handle_readfile(argc, argv);
+        else if (strcmp(argv[0], "writefile") == 0)handle_writefile(argc, argv);
+        else if (strcmp(argv[0], "appendfile") == 0)handle_appendfile(argc, argv);
+        else if (strcmp(argv[0], "rmfile") == 0)  handle_rmfile(argc, argv);
+        else if (strcmp(argv[0], "ls") == 0)      list_files();
+        else print_to_screen("Error: Unknown command\n");
+    }
+    print_to_screen("Exiting CLI...\n");
+}
+</code></pre>
+        </section>
+
+        <!-- 6. Example Built‑In: Process -->
+        <section>
+          <h2>6. Example Built‑In: <code>process</code></h2>
+          <p>
+            Demonstrating a multi‑argument handler that creates and queues dummy processes:
+          </p>
+          <pre><code>void handle_process_cmd(int argc, char *argv[]) {
+    if (argc < 2) {
+        print_to_screen("Usage: process <name> [priority]\n");
+        return;
+    }
+    char *name = argv[1];
+    int prio   = (argc > 2) ? atoi(argv[2]) : DEFAULT_PRIO;
+    // Lookup in array of commands
+    for (int i=0; i<num_cmds; i++) {
+        if (strcmp(name, cmds[i].name)==0) {
+            uint32_t *st = kmalloc(STACK_SIZE);
+            create_process(get_new_pid(), cmds[i].entry, st+STACK_WORDS, prio);
+            return;
+        }
+    }
+    print_to_screen("Error: Unknown process\n");
+}
+</code></pre>
+        </section>
+
+        <!-- 7. Error Handling & Feedback -->
+        <section>
+          <h2>7. Error Handling & Feedback</h2>
+          <p>
+            Each built‑in validates <code>argc</code> and arguments. Failures print descriptive messages, e.g., "Error: File not found." Users see immediate feedback in the same prompt.
+          </p>
+        </section>
+
+        <!-- 8. Extensibility -->
+        <section>
+          <h2>8. Extensibility & Future Features</h2>
+          <ul>
+            <li><strong>Tab Completion:</strong> Suggest commands and filenames.</li>
+            <li><strong>Command History:</strong> Store past commands in a circular buffer.</li>
+            <li><strong>Piping:</strong> Implement in‑kernel pipes and redirection.</li>
+            <li><strong>Scripting:</strong> Execute batch files or scripts.</li>
+            <li><strong>ANSI Escape Codes:</strong> Colorize output and control cursor.</li>
+          </ul>
+        </section>
+
+        <!-- 9. Conclusion -->
+        <section>
+          <h2>9. Conclusion</h2>
+          <p>
+            ApnaOS’s CLI showcases how a kernel‑level shell can be constructed from low‑level primitives—interrupts, buffers, and simple parsers—yet remain highly extensible as the OS grows.
+          </p>
+        </section>
+
+      </article>
     </main>
+
     <footer>© 2025 ApnaOS Team</footer>
   </div>
 </body>
