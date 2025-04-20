@@ -1,12 +1,11 @@
-<!-- process.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ApnaOS – Process</title>
+  <title>ApnaOS – Process Management</title>
   <link rel="stylesheet" href="css/style.css" />
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
 </head>
 <body>
   <div class="sidebar">
@@ -22,13 +21,170 @@
 
   <div class="container">
     <header class="site-header">
-      <h1>Process Management</h1>
-      <p>Overview of process lifecycle, states, PCB design, and context switching.</p>
+      <h1>Process Management in ApnaOS</h1>
+      <p>Understanding process lifecycle, priority scheduling, and context switching in our kernel.</p>
     </header>
+
     <main>
-      <p>— Document your process creation, scheduling handoffs, and teardown here.</p>
+      <article>
+
+        <!-- Conceptual Foundations -->
+        <section>
+          <h2>1. Conceptual Foundations</h2>
+          <p>
+            In any operating system, a <strong>process</strong> represents the execution context of a program, encapsulating its code, data, and CPU state. To manage processes, the kernel maintains a <strong>Process Control Block (PCB)</strong> for each one, storing metadata such as <em>PID</em> (process identifier), <em>state</em>, <em>priority</em>, and pointers to user and kernel stacks. 
+          </p>
+          <p>
+            Processes transition through various states—<code>NEW</code>, <code>READY</code>, <code>RUNNING</code>, and <code>BLOCKED</code>—as they await CPU time, execute, or perform I/O. The kernel uses a <strong>ready queue</strong> to track processes waiting to run. In ApnaOS, we implement a <strong>priority queue</strong> for scheduling: lower numeric priorities run first, with ties handled in a first-come, first-served fashion.
+          </p>
+          <p>
+            <strong>Context switching</strong> is the mechanism that saves the CPU registers of the current process into its PCB, selects a new process, restores its registers, and resumes execution—providing the illusion of concurrency on a single core.
+          </p>
+        </section>
+
+        <!-- Implementation Details -->
+        <section>
+          <h2>2. Implementation Details</h2>
+
+          <h3>2.1 Process Control Block (PCB)</h3>
+          <p>
+            The core data structure is the PCB, defined roughly as:
+          </p>
+          <pre><code>typedef struct PCB {
+    uint32_t pid;              // Unique process identifier
+    enum State state;          // NEW, READY, RUNNING, etc.
+    int priority;              // Lower is higher priority
+    uint32_t* user_stack_ptr;  // Pointer into user-mode stack
+    uint32_t* user_stack_base; // Base of user-mode stack region
+    uint32_t* kernel_stack_ptr; // Saved kernel-mode ESP
+    uint32_t* kernel_stack_base;
+    bool is_new_child;         // Fork helper flag
+    struct PCB* next;          // For ready queue linkage
+    struct PCB* next_in_table; // For global process list
+    // Additional registers: cr3, program_counter, etc.
+} PCB;
+</code></pre>
+
+          <h3>2.2 PID Generation & Process Table</h3>
+          <p>
+            Each process gets a unique PID by incrementing <code>next_pid</code>:
+          </p>
+          <pre><code>static uint32_t next_pid = 1;
+uint32_t get_new_pid() {
+    return next_pid++;
+}
+</code></pre>
+          <p>
+            New PCBs are linked into a global <em>process table</em> so the kernel can track all processes for cleanup and resource management.
+          </p>
+
+          <h3>2.3 Ready Queue & Priority-based Enqueue</h3>
+          <p>
+            We maintain a <code>ProcessQueue</code> with <code>front</code> and <code>rear</code> pointers. To insert a process, <code>enqueue_process()</code> finds the proper position by priority:
+          </p>
+          <ol>
+            <li>If the queue is empty, both <code>front</code> and <code>rear</code> point to the new PCB.</li>
+            <li>If the new process has a higher priority (numeric <em>lower</em>) than the current front, insert at the beginning.</li>
+            <li>Otherwise, walk the list until finding a process with greater priority value, and insert before it. Equal priorities are enqueued in arrival order.</li>
+          </ol>
+          <pre><code>void enqueue_process(ProcessQueue* q, PCB* p) {
+    p->next = NULL;
+    if (is_queue_empty(q)) { /* empty */ }
+    else if (p->priority < q->front->priority) { /* front insertion */ }
+    else {
+        PCB* cur = q->front;
+        while (cur->next && cur->next->priority <= p->priority) {
+            cur = cur->next;
+        }
+        // insert after cur
+    }
+    // update q->rear if needed
+}
+</code></pre>
+
+          <h3>2.4 Context Switching & Scheduler</h3>
+          <p>
+            The <code>schedule()</code> function embodies preemptive scheduling:
+          </p>
+          <ol>
+            <li>If <code>current_process</code> is running, mark it <code>READY</code> and re-enqueue it.</li>
+            <li>Dequeue the highest-priority ready process.</li>
+            <li>If none exists, enter the kernel’s CLI loop.</li>
+            <li>Otherwise, set its state to <code>RUNNING</code> and invoke an assembly stub to switch stacks:
+              <ul>
+                <li>Save the old kernel <code>ESP</code> into its PCB.</li>
+                <li>Load the new process’s kernel and user <code>ESP</code> and <code>EBP</code>.</li>
+                <li>Execute <code>ret</code> to resume user-mode <code>EIP</code>.</li>
+              </ul>
+            </li>
+          </ol>
+          <pre><code>void schedule() {
+    if (current_process) {
+        current_process->state = STATE_READY;
+        enqueue_process(&ready_queue, current_process);
+    }
+    PCB* next = dequeue_process(&ready_queue);
+    if (!next) { cli_loop(); }
+    next->state = STATE_RUNNING;
+    // assembly magic to swap ESP/EBP and ret
+}
+</code></pre>
+
+          <h3>2.5 Process Creation (<code>create_process</code>)</h3>
+          <p>
+            To create a new process with a given <code>entry_point</code>, <code>stack_top</code>, and <code>priority</code>:
+          </p>
+          <ol>
+            <li>Allocate and initialize the PCB.</li>
+            <li>Assign PID, state <code>NEW</code>, and priority.</li>
+            <li>Set up the user-mode stack: reserve space, push the entry point (return address), and a dummy EBP.</li>
+            <li>Allocate a kernel stack via <code>kmalloc</code> and record its <code>ESP</code>.</li>
+            <li>Link into the global process table.</li>
+            <li>Mark state <code>READY</code> and enqueue.</li>
+          </ol>
+          <pre><code>PCB* create_process(uint32_t pid, uint32_t* entry, uint32_t* stack_top, int prio) {
+    PCB* p = kmalloc(sizeof(PCB));
+    p->pid = pid;
+    p->state = STATE_NEW;
+    p->priority = prio;
+    // prepare user stack
+    *(--stack_top) = (uint32_t)entry;
+    *(--stack_top) = 0;
+    p->user_stack_ptr = stack_top;
+    allocate_kernel_stack(p);
+    // add to process table & ready queue
+    return p;
+}
+</code></pre>
+
+        </section>
+
+        <!-- Future Directions -->
+        <section>
+          <h2>3. Future Directions</h2>
+          <ul>
+            <li><strong>Time slicing:</strong> Add timer interrupts for preemption and enforce quantum limits.</li>
+            <li><strong>Multilevel queues:</strong> Separate interactive vs. batch processes by different priority classes.</li>
+            <li><strong>Advanced synchronization:</strong> Integrate semaphores, mutexes, and condition variables.</li>
+            <li><strong>Process termination:</strong> Clean up PCB, stacks, and remove from queues.</li>
+            <li><strong>Inter-process communication:</strong> Message passing and shared memory mechanisms.</li>
+          </ul>
+        </section>
+
+        <section>
+          <h2>4. Conclusion</h2>
+          <p>
+            ApnaOS’s process management module lays a clear, extensible foundation for multitasking. By combining a priority-based ready queue,
+            robust PCB metadata, and low-level context switching, we ensure fair and efficient CPU utilization across processes.
+          </p>
+        </section>
+
+      </article>
     </main>
-    <footer>© 2025 ApnaOS Team</footer>
+
+    <footer>
+      © 2025 ApnaOS Team
+    </footer>
   </div>
 </body>
 </html>
