@@ -47,105 +47,108 @@
 
         <!-- Implementation Details -->
         <section>
-          <h2>2. Implementation Details</h2>
+          <h2>Implementation Details</h2>
 
-          <h3>2.1 Memory Pool Initialization</h3>
-          <p>
-            We reserve a static 16 MB buffer for kernel allocations:
-          </p>
-          <pre><code>#define KERNEL_MEMORY_SIZE (1024 * 1024 * 16)  // 16 MB
-static uint8_t kernel_memory[KERNEL_MEMORY_SIZE];
-static uint32_t kernel_memory_offset = 0;
-          </code></pre>
-          <p>
-            During <code>memory_init()</code>, we clear this buffer to avoid exposing residual data and reset the bump pointer (<code>kernel_memory_offset</code>) to zero. This sets the stage for subsequent <code>kmalloc</code> calls to carve out memory from the start of the buffer.
-          </p>
-          <pre><code>void memory_init(uint32_t multiboot_info) {
-    // Zero-out the entire pool
-    for (uint32_t i = 0; i < KERNEL_MEMORY_SIZE; i++) {
-        kernel_memory[i] = 0;
-    }
-    kernel_memory_offset = 0;
-    debug_print("DEBUG: Kernel memory initialized.");
-    // Future: parse multiboot_info to build page tables, bitmap, etc.
-}
-          </code></pre>
-
-          <h3>2.2 Byte-level Allocation (<code>kmalloc</code>)</h3>
-          <p>
-            To satisfy allocation requests of <code>size</code> bytes, <code>kmalloc</code> performs the following steps:
-          </p>
-          <ol>
-            <li><strong>Compute total size:</strong> add <code>sizeof(memory_block_t)</code> to accommodate the header.</li>
-            <li><strong>Bounds check:</strong> ensure <code>kernel_memory_offset + total</code> does not exceed our pool.</li>
-            <li><strong>Header placement:</strong> write <code>size</code> and clear <code>is_free</code> at the bump pointer.</li>
-            <li><strong>Offset bumping:</strong> advance by <code>total</code> bytes, then align <code>kernel_memory_offset</code> up to the next 4-byte boundary to satisfy alignment requirements on many architectures.</li>
-            <li><strong>Return payload:</strong> pointer arithmetic yields an address just past the header.
-            </li>
-          </ol>
-          <pre><code>void* kmalloc(size_t size) {
-    size_t total = size + sizeof(memory_block_t);
-    if (kernel_memory_offset + total > KERNEL_MEMORY_SIZE) {
-        return NULL; // insufficient space
-    }
-
-    // Place header at bump pointer
-    memory_block_t* block = (memory_block_t*)&kernel_memory[kernel_memory_offset];
-    block->size = size;
-    block->is_free = 0;
-
-    // Advance offset
-    kernel_memory_offset += total;
-    // Align to 4-byte boundary
-    if (kernel_memory_offset % 4 != 0) {
-        kernel_memory_offset += (4 - (kernel_memory_offset % 4));
-    }
-
-    // Return pointer to payload region
-    return (void*)(block + 1);
-}
-          </code></pre>
-
-          <h3>2.3 Deallocation (<code>kfree</code>)</h3>
-          <p>
-            Although our bump allocator does not reclaim space on free, we update the header’s <code>is_free</code> flag for each block. This bookkeeping will enable a future free-list or coalescing allocator to identify available blocks:
-          </p>
-          <pre><code>void kfree(void* ptr) {
-    if (!ptr) return;
-    // Locate header immediately before payload
-    memory_block_t* block = (memory_block_t*)((uint8_t*)ptr - sizeof(memory_block_t));
-    block->is_free = 1;
-    debug_print("DEBUG: Memory freed");
-}
-          </code></pre>
-
-          <h3>2.4 Page Allocation</h3>
-          <p>
-            For many kernel operations—especially paging and MMU setup—we need one or more contiguous 4 KB pages. We simply wrap <code>kmalloc</code> to request <code>num_pages * 4096</code> bytes:
-          </p>
-          <pre><code>void* allocate_pages(size_t num_pages) {
-    return kmalloc(num_pages * 4096);
-}
-          </code></pre>
-
-          <h3>2.5 Page Table Copying</h3>
-          <p>
-            Upon process creation, the kernel clones the parent’s page tables into the child’s address space. In production OSes, copy-on-write reduces copying overhead; here we perform a direct memory copy of the first-level page directory (4 KB):
-          </p>
-          <pre><code>void copy_page_tables(uint32_t parent_cr3, uint32_t child_cr3) {
-    // parent_cr3 and child_cr3 hold physical addresses of page directory
-    copy_memory((void*)child_cr3, (void*)parent_cr3, 4096);
-}
-
-void copy_memory(void* dest, void* src, size_t size) {
-    uint8_t* d = (uint8_t*)dest;
-    uint8_t* s = (uint8_t*)src;
-    for (size_t i = 0; i < size; i++) {
-        d[i] = s[i];
-    }
-}
-          </code></pre>
+          <h3>1. Kernel Heap Region</h3>
+          <pre><code>#define KERNEL_MEMORY_SIZE (1024 * 1024 * 16)</code></pre>
+          <p>Defines a fixed 16 MiB region for the kernel’s dynamic allocations.</p>
+          <pre><code>static uint8_t kernel_memory[KERNEL_MEMORY_SIZE]</code></pre>
+          <p>Reserves that 16 MiB as a global byte array right in the kernel’s data segment.</p>
+          <pre><code>static uint32_t kernel_memory_offset = 0</code></pre>
+          <p>Tracks the next free byte in kernel_memory where a new allocation would start.</p>
         </section>
+
+        <h3>2. Memory Initialisation</h3>
+          <pre><code>void memory_init(uint32_t multiboot_info) {
+            (void)multiboot_info;
+            for (uint32_t i = 0; i < KERNEL_MEMORY_SIZE; i++) {
+                kernel_memory[i] = 0;
+            }
+            kernel_memory_offset = 0;
+        }                    
+          </code></pre>
+            <ul>
+              <li>Zeroing out kernel_memory ensures no residual data from boot stages remains.</li>
+              <li>Resetting kernel_memory_offset to 0 marks the entire heap as available.</li>
+            </ul>
+
+            <h3>3. K-Free</h3>
+          <pre><code>void kfree(void* ptr) {
+            if (ptr == NULL) {
+                return;
+            }
+            memory_block_t* block = (memory_block_t*)((uint8_t*)ptr - sizeof(memory_block_t));
+            block->is_free = 1;
+        }
+          </code></pre>
+            <ul>
+                <li>ptr is NULL, nothing happens.</li>
+                <li>Subtracting sizeof(memory_block_t) from ptr locates the block’s header.</li>
+                <li>Setting is_free = 1 makes that block reusable by future allocations.</li>
+            </ul>
+            <pre><code>typedef struct memory_block {
+              size_t size;
+              uint8_t is_free;
+          } memory_block_t;</code></pre>
+
+          <h3>4. Kmalloc</h3>
+          <pre><code>void* kmalloc(size_t size) {
+            size_t total_size = size + sizeof(memory_block_t);
+            
+            if (kernel_memory_offset + total_size > KERNEL_MEMORY_SIZE) {
+                return NULL;
+            }
+            memory_block_t* block = (memory_block_t*)&kernel_memory[kernel_memory_offset];
+            
+            block->size = size;
+            block->is_free = 0;
+            
+            kernel_memory_offset += total_size;
+            
+            if (kernel_memory_offset % 4 != 0) {
+                kernel_memory_offset += 4 - (kernel_memory_offset % 4);
+            }
+            
+            return (void*)((uint8_t*)block + sizeof(memory_block_t));
+        }        
+          </code></pre>
+            <ul>
+                <li>Computes the total bytes needed by adding the header size to the requested size, verifies the heap has enough space, returning NULL if not.</li>
+                <li>Places a memory_block_t header at the current offset in the static heap array.</li>
+                <li>Stores the requested size and marks the block in use.</li>
+                <li>Advances the offset by the combined header and payload size.</li>
+                <li>Aligns the offset to a 4‑byte boundary for future allocations.</li>
+                <li>Returns a pointer just past the header, pointing to the usable memory region.</li>
+            </ul>
+
+            <h3>5. Helper Functions</h3>
+            <pre><code>void* allocate_pages(size_t num_pages) {
+            return kmalloc(num_pages * 4096);
+          }        
+            </code></pre>
+            <ul>
+              <li>Requests a contiguous chunk equal to <code>num_pages × 4096 bytes</code> by calling <code>kmalloc</code>.</li>
+            </ul>
+            <pre><code>void copy_page_tables(uint32_t parent_cr3, uint32_t child_cr3) {
+            copy_memory((void*)child_cr3, (void*)parent_cr3, 4096);
+          }        
+            </code></pre>
+            <ul>
+              <li>Duplicates a single page (4 KB) of page‑table data from the parent’s CR3 base to the child’s CR3 base using a raw memory copy.</li>
+            </ul>
+            <pre><code>void copy_memory(void* dest, void* src, size_t size) {
+            uint8_t* d = (uint8_t*)dest;
+            uint8_t* s = (uint8_t*)src;
+            
+            for (size_t i = 0; i < size; i++) {
+              d[i] = s[i];
+            }
+          }        
+            </code></pre>
+            <ul>
+              <li>Casts source and destination pointers to byte pointers.</li>
+              <li>Iterates over each of the <code>size</code> bytes, copying from source to destination one byte at a time.</li>
+            </ul>
 
         <!-- Future Directions -->
         <section>
