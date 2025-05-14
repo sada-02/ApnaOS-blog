@@ -44,27 +44,74 @@
 
         <!-- Implementation Details -->
         <section>
-          <h2>2. Implementation Details</h2>
+          <h2>Implementation Details</h2>
 
-          <h3>2.1 Process Control Block (PCB)</h3>
+          <h3>1. Process States</h3>
           <p>
             The core data structure is the PCB, defined roughly as:
           </p>
+          <pre><code>#define STATE_READY    0
+            #define STATE_RUNNING  1
+            #define STATE_BLOCKED  2
+            #define STATE_NEW      3
+            #define STATE_EXIT     4
+            #define STATE_ZOMBIE   5            
+          </code></pre>
+            <ul>
+            <li><strong>STATE_NEW (3):</strong> Freshly created process that has not yet been assigned to the scheduler's ready queue.</li>
+            <li><strong>STATE_READY (0):</strong> Process that is loaded into memory and is waiting to be scheduled on the CPU.</li>
+            <li><strong>STATE_RUNNING (1):</strong> Process is currently executing on the CPU.</li>
+            <li><strong>STATE_BLOCKED (2):</strong> Process cannot proceed until some event occurs.</li>
+            <li><strong>STATE_EXIT (4):</strong> Process has finished execution.</li>
+            <li><strong>STATE_ZOMBIE (5):</strong> Process has exited, but its parent has not yet read its exit status. The PCB remains in the process table until collected by its parent.</li>
+            </ul>
+
+          <h3>2. Process Control Block (PCB)</h3>
+          <p>
+            The core structure of PCB is defined roughly as:
+          </p>
           <pre><code>typedef struct PCB {
-    uint32_t pid;              // Unique process identifier
-    enum State state;          // NEW, READY, RUNNING, etc.
-    int priority;              // Lower is higher priority
-    uint32_t* user_stack_ptr;  // Pointer into user-mode stack
-    uint32_t* user_stack_base; // Base of user-mode stack region
-    uint32_t* kernel_stack_ptr; // Saved kernel-mode ESP
+    uint32_t pid;           
+    enum State state;       
+    int priority;          
+    uint32_t* user_stack_ptr;  
+    uint32_t* user_stack_base; 
+    uint32_t* kernel_stack_ptr;
     uint32_t* kernel_stack_base;
-    bool is_new_child;         // Fork helper flag
-    struct PCB* next;          // For ready queue linkage
-    struct PCB* next_in_table; // For global process list
-    // Additional registers: cr3, program_counter, etc.
+    bool is_new_child;   
+    struct PCB* next;          
+    struct PCB* next_in_table; 
 } PCB;
 </code></pre>
+<ul>
+  <li>→ <strong>pid:</strong> A unique identifier for each process.</li>
+  <li>→ <strong>state:</strong> The current state of the process (e.g., NEW, READY, RUNNING).</li>
+  <li>→ <strong>user_stack_ptr:</strong> Points to the current top of the process user-mode stack. On a context switch out of user mode, you save the stack pointer here so you can resume later.</li>
+  <li>→ <strong>program_counter:</strong> Holds the saved instruction pointer (EIP for 32-bit x86).</li>
+  <li>→ <strong>cr3:</strong> A special CPU control register on x86 architecture used by the CPU to locate the page table (base address of the page directory) of the process.</li>
+  <li>→ <strong>priority:</strong> A numeric priority value.</li>
+  <li>→ <strong>deadline:</strong> A deadline for the process to complete its task.</li>
+  <li>→ <strong>time_to_run:</strong> The remaining time the process has to run.</li>
+  <li>→ <strong>PCB* next:</strong> A pointer to the next PCB in the ready queue creating a chain.</li>
+  <li>→ <strong>PCB* next_in_table:</strong> Pointer used to link all PCBs in the global process table.</li>
+  <li>→ <strong>PCB* parent:</strong> Points to the PCB of the parent process.</li>
+  <li>→ <strong>exit_status:</strong> The exit status of the process.</li>
+  <li>→ <strong>is_new_child:</strong> A flag that can help the scheduler or process manager know that this PCB was just created by fork().</li>
+  <li>→ <strong>user_stack_base:</strong> Base address (lowest address) of the user-mode stack.</li>
+  <li>→ <strong>kernel_stack_base:</strong> Base address of the kernel-mode stack to handle system calls and interrupts.</li>
+  <li>→ <strong>kernel_stack_ptr:</strong> Points to the current top of the process kernel-mode stack.</li>
+</ul>
 
+<pre><code>typedef struct {
+  PCB* front;  // First element in the queue
+  PCB* rear;   // Last element in the queue
+} ProcessQueue;        
+</code></pre>
+
+<p>
+  front: Points to the first PCB (next to be dequeued).
+  rear: Points to the last PCB (where new PCBs are enqueued).
+</p>
           <h3>2.2 PID Generation & Process Table</h3>
           <p>
             Each process gets a unique PID by incrementing <code>next_pid</code>:
