@@ -48,137 +48,428 @@
 
         <!-- Implementation Details -->
         <section>
-          <h2>2. Implementation Details</h2>
+          <h2>Implementation Details</h2>
 
-          <h3>2.1 Syscall Initialization</h3>
           <p>
-            In <code>init_syscalls()</code>, the kernel sets up necessary interrupt descriptors and any syscall number tables. For simplicity, ApnaOS registers its handler for the designated syscall interrupt vector during IDT setup; here we simply confirm initialization:
-          </p>
-          <pre><code>void init_syscalls(void) {
-    debug_print("DEBUG: System calls initialized");
-    // Future: configure IDT entry for syscall gate
-}
-</code></pre>
-
-          <h3>2.2 Retrieving the Current Process</h3>
-          <p>
-            Handlers often need access to the calling process’s <code>PCB</code>. We provide a simple wrapper:
+            Returns a pointer to whichever process is currently running on the CPU.
           </p>
           <pre><code>PCB* get_current_process(void) {
-    return current_process;
-}
-</code></pre>
+            return current_process;
+        }   
+          </code></pre>
+            <ul>
+              The kernel keeps a global variable (often named current_process) pointing at the PCB of the process that last got scheduled.
+            </ul>
 
-          <h3>2.3 Fork: Cloning a Process</h3>
+          <h3>1. Finding Zombie Process</h3>
           <p>
-            <code>fork_syscall()</code> duplicates the calling process’s context:
+            A helper that lets a parent process locate one of its children that has exited but not yet been coll ected (i.e., is in the ZOMBIE state).
           </p>
-          <ol>
-            <li><strong>Capture return address & stack pointer:</strong> Inline assembly reads <code>EIP</code> and <code>EBP</code> locations from the user stack.</li>
-            <li><strong>Allocate a new <code>PCB</code>:</strong> Copy and adjust metadata (PID, parent link, priority).</li>
-            <li><strong>Copy user stack:</strong> Allocate a fresh 4 KB page, compute the current stack offset, and <code>copy_memory</code>.</li>
-            <li><strong>Duplicate page tables:</strong> If the parent uses paging (<code>cr3</code> non-zero), allocate a new page directory and <code>copy_page_tables</code>.</li>
-            <li><strong>Allocate kernel stack:</strong> Reserve kernel-mode stack space via <code>kmalloc</code>.</li>
-            <li><strong>Queue child process:</strong> Mark <code>STATE_READY</code> and enqueue; return child PID to parent.</li>
-          </ol>
+          <pre><code>static PCB* find_zombie_child(PCB* parent) {
+            debug_print("DEBUG: Searching for zombie child of parent with pid:");
+            debug_int(parent->pid);
+            PCB* current = process_table_head;
+            PCB* prev = NULL;
+            while (current != NULL) {
+                if (current->parent->pid == parent->pid && current->state == STATE_ZOMBIE) {
+                    debug_print("DEBUG: Found zombie child");
+                    if (prev == NULL) {
+                        process_table_head = current->next_in_table;
+                    } else {
+                        prev->next_in_table = current->next_in_table;
+                    }
+                    
+                    return current;
+                }
+                
+                prev = current;
+                current = current->next_in_table;
+            }
+            
+            return NULL;
+        }          
+          </code></pre>
+            <ul>
+                <li>Scan the global process singly-linked list headed at process_table_head.</li>
+                <li>Maintain two pointers, current for the node being inspected, and prev for the node immediately before it (so we can unlink if needed).</li>
+                <li>Check each PCB. If this PCB’s parent pointer points to the given parent and its state is equal to ZOMBIE, we’ve found a child that has exited but whose resources haven’t yet been released.</li>
+                <li>Unlink the zombie from the table. If prev is NULL, the zombie was at the list head, so move process_table_head forward. Otherwise, bypass it by setting prev->next_in_table to current->next_in_table.</li>
+                <li>The parent can now inspect the PCB, free its memory, and complete the wait.</li>
+                <li>If no matching zombie is found, return NULL, indicating the parent has no dead children waiting to be collected.</li>
+            </ul>
+
+            <h3>2. Fork system call</h3>
           <pre><code>int fork_syscall(void) {
-    // 1. Extract return address & stack pointer
-    __asm__ volatile(
-        "movl 4(%%ebp), %0\n\t"
-        "lea (%%ebp), %1\n\t"
-        : "=r" (return_addr), "=r" (stack_ptr)
-    );
-    // 2. Allocate child PCB and inherit metadata
-    PCB* parent = get_current_process();
-    PCB* child  = kmalloc(sizeof(PCB));
-    child->pid  = get_new_pid();
-    child->parent = parent;
-    child->priority = parent->priority;
-    // 3. User stack copy
-    uint32_t* base = parent->user_stack_base;
-    uint32_t offset = (uint32_t)parent->user_stack_ptr - (uint32_t)base;
-    uint32_t* child_base = kmalloc(4096);
-    copy_memory(child_base, base, 4096);
-    child->user_stack_base = child_base;
-    child->user_stack_ptr  = child_base + (offset/sizeof(uint32_t));
-    // 4. Page table duplication
-    if (parent->cr3) {
-        child->cr3 = (uint32_t)kmalloc(4096);
-        copy_page_tables(parent->cr3, child->cr3);
-    }
-    // 5. Kernel stack allocation
-    child->kernel_stack_base = kmalloc(KERNEL_STACK_SIZE);
-    child->kernel_stack_ptr  = child->kernel_stack_base + (KERNEL_STACK_SIZE/sizeof(uint32_t));
-    // 6. Ready & return
-    child->state = STATE_READY;
-    child->is_new_child = true;
-    enqueue_process(&ready_queue, child);
-    return child->pid;
-}
-</code></pre>
+            uint32_t* return_addr;
+            uint32_t* stack_ptr;
+        
+            __asm__ volatile(
+                "movl 4(%%ebp), %0\n\t"
+                "lea (%%ebp), %1\n\t" 
+                : "=r" (return_addr), "=r" (stack_ptr)
+            );
+        
+            debug_print("DEBUG: Fork syscall started");
+            PCB* parent = get_current_process();
+            if (parent == NULL) {
+                debug_print("DEBUG: Fork failed - no current process");
+                return -1;
+            }
+        
+            parent->user_stack_ptr = stack_ptr;
+            PCB* child = (PCB*)kmalloc(sizeof(PCB));
+            if (child == NULL) {
+                debug_print("DEBUG: Fork failed - memory allocation error");
+                return -1;
+            }
+            
+            child->pid = get_new_pid();
+            child->parent = parent;
+            child->priority = parent->priority;
+            uint32_t* child_stack_base = (uint32_t*)kmalloc(4096);
+            if (child_stack_base == NULL) {
+                debug_print("DEBUG: Fork failed - stack allocation error");
+                return -1;
+            }
+        
+            uint32_t stack_offset = (uint32_t)parent->user_stack_ptr - (uint32_t)parent->user_stack_base;
+            copy_memory(child_stack_base, parent->user_stack_base, 4096);
+            child->user_stack_ptr = (uint32_t*)((uint32_t)child_stack_base + stack_offset);
+            if (parent->cr3 != 0) {
+                child->cr3 = (uint32_t)kmalloc(4096);
+                if (child->cr3 == 0) {
+                    debug_print("DEBUG: Fork failed - page table allocation error");
+                    return -1;  
+                }
+                copy_page_tables(parent->cr3, child->cr3);
+            }
+        
+            child->kernel_stack_base = (uint32_t*)kmalloc(KERNEL_STACK_SIZE);
+            child->kernel_stack_ptr = child->kernel_stack_base + (KERNEL_STACK_SIZE/sizeof(uint32_t));
+            
+            child->state = STATE_READY;
+            child->is_new_child = true;
+            child->next_in_table = process_table_head;
+            process_table_head = child;
+            enqueue_process(&ready_queue, child);
+            
+            debug_print("DEBUG: Fork created new process with PID:");
+            debug_int(child->pid);
+            return child->pid;
+        }        
+          </code></pre>
+          <ul>
+            <ol>
+              <li>
+                <strong>Reads two things from the calling stack frame:</strong>
+                <ul>
+                  <li><code>return_addr</code> -> gets the original return address (where execution should resume once <code>fork()</code> returns).</li>
+                  <li><code>stack_ptr</code> -> gets the current stack pointer of the user process (its EBP), so the child can pick up exactly where the parent left off.</li>
+                </ul>
+              </li>
+              <li>
+                <strong>Locating the Parent PCB:</strong>
+                <ul>
+                  <li>Call <code>get_current_process()</code> to retrieve the PCB of the process that invoked <code>fork()</code>.</li>
+                  <li>If no current process, the call fails with <code>-1</code>.</li>
+                </ul>
+              </li>
+              <li>
+                <strong>Saving the Parent Stack Pointer:</strong>
+                <ul>
+                  <li>The parent’s PCB is updated with its latest <code>user_stack_ptr</code>, ensuring we know exactly where its stack was when <code>fork()</code> was called.</li>
+                </ul>
+              </li>
+              <li>
+                <strong>Allocating a Child PCB:</strong>
+                <ul>
+                  <li>A fresh PCB structure is allocated.</li>
+                  <li>If allocation fails, return <code>-1</code>.</li>
+                </ul>
+              </li>
+              <li>
+                <strong>Assigning a New PID and Inheriting Attributes:</strong>
+                <ul>
+                  <li>The child gets a new, unique <code>pid</code>.</li>
+                  <li>Its <code>parent</code> pointer is set to the parent PCB.</li>
+                  <li>Scheduling parameters (priority, deadline, time slice) are cloned from the parent.</li>
+                </ul>
+              </li>
+              <li>
+                <strong>Duplicating the User Stack:</strong>
+                <ul>
+                  <li>A new 4 KB buffer is allocated for the child’s user stack.</li>
+                  <li>Compute the offset of the parent’s stack pointer from its base, then copy the entire parent stack contents into the child buffer.</li>
+                  <li>The child’s <code>user_stack_ptr</code> is set to the base of its new stack plus that same offset, so it “sits” at the same point in the stack as the parent did.</li>
+                </ul>
+              </li>
+              <li>
+                <strong>Copying Page Tables:</strong>
+                <ul>
+                  <li>If the parent already has a page table (<code>cr3 ≠ 0</code>), allocate a new page‑table area for the child and deep‑copy the parent’s page tables.</li>
+                  <li>This gives the child its own address space identical to the parent’s at fork time.</li>
+                </ul>
+              </li>
+              <li>
+                <strong>Allocating the Kernel Stack:</strong>
+                <ul>
+                  <li>Just like during process creation, the child gets its own kernel‑mode stack by calling the same stack‐allocation helper.</li>
+                </ul>
+              </li>
+              <li>
+                <strong>Marking the Child READY:</strong>
+                <ul>
+                  <li><code>state</code> is set to <code>STATE_READY</code>.</li>
+                  <li><code>is_new_child</code> is flagged <code>true</code>, so when the scheduler first dispatches the child, it knows to jump into user mode and return <code>0</code> from <code>fork()</code>.</li>
+                </ul>
+              </li>
+              <li>
+                <strong>Linking into Kernel Structures:</strong>
+                <ul>
+                  <li>The child PCB is pushed onto the global process table list and enqueued on the ready queue so that the scheduler will run it in due course.</li>
+                </ul>
+              </li>
+              <li>
+                <strong>Returning to the Parent:</strong>
+                <ul>
+                  <li><code>fork_syscall()</code> returns the child’s PID to the parent process.</li>
+                  <li>When the child is eventually scheduled, that special <code>is_new_child</code> flag plus the inline‐assembly path ensure the child sees <code>fork()</code> return <code>0</code>.</li>
+                </ul>
+              </li>
+            </ol>
+          <ul>
 
-          <h3>2.4 Wait: Reaping Zombie Children</h3>
-          <p>
-            The <code>wait_syscall()</code> suspends the parent until one of its children exits:
-          </p>
-          <ol>
-            <li><strong>Search for zombies:</strong> <code>find_zombie_child()</code> scans the <em>process_table</em> for children in <code>STATE_ZOMBIE</code>.</li>
-            <li><strong>Immediate return:</strong> If found, return its PID and free its <code>PCB</code>.</li>
-            <li><strong>Block parent:</strong> If none, set parent <code>STATE_BLOCKED</code> and invoke <code>yield_syscall()</code> to reschedule.</li>
-            <li><strong>Resume and re-check:</strong> Upon wake-up, scan again; return child PID or <code>-1</code> on failure.
-            </li>
-          </ol>
+            <h3>3. Wait Systemcall</h3>
           <pre><code>int wait_syscall(int* status) {
-    PCB* parent = get_current_process();
-    PCB* zombie;
-    // 1. Check existing zombies
-    zombie = find_zombie_child(parent);
-    if (zombie) {
-        if (status) *status = zombie->exit_status;
-        int pid = zombie->pid;
-        kfree(zombie);
-        return pid;
-    }
-    // 2. Block parent and yield
-    parent->state = STATE_BLOCKED;
-    yield_syscall();
-    // 3. Wake-up and re-scan
-    zombie = find_zombie_child(parent);
-    if (zombie) {
-        if (status) *status = zombie->exit_status;
-        int pid = zombie->pid;
-        kfree(zombie);
-        return pid;
-    }
-    return -1;
-}
-</code></pre>
+            debug_print("DEBUG: Wait syscall started");
+        
+            PCB* parent = get_current_process();
+            if (parent == NULL) {
+                debug_print("DEBUG: Wait failed - no current process");
+                return -1;
+            }
+            PCB* zombie_child = find_zombie_child(parent);
+            if (zombie_child != NULL) {
+                if (status != NULL) {
+                    *status = zombie_child->exit_status;
+                }
+                
+                int child_pid = zombie_child->pid;
+                kfree(zombie_child);
+        
+                return child_pid;
+            }
+        
+            debug_print("DEBUG: No existing zombie children found. Blocking parent.");
+            parent->state = STATE_BLOCKED;
+            
+            debug_print("DEBUG: Wait syscall going to schedule a process after blocking process with PID:");
+            debug_int(parent->pid);
+            yield_syscall();
+        
+            debug_print("DEBUG: Wait syscall resumed after blocking for the process with PID:");
+            debug_int(parent->pid);
+            
+            zombie_child = find_zombie_child(parent);
+            if (zombie_child != NULL) {
+                if (status != NULL) {
+                    *status = zombie_child->exit_status;
+                }
+                
+                int child_pid = zombie_child->pid;
+                
+                kfree(zombie_child);
+        
+                return child_pid;
+            }
+            
+            debug_print("DEBUG: Wait failed - no children found after blocking");
+        
+            return -1;
+        }
+          </code></pre>
+            <ul>
+              <ul>
+                <li><strong>Begin Wait:</strong>
+                  <ul>
+                    <li>The kernel retrieves the calling process’s PCB via <code>get_current_process()</code>.</li>
+                    <li>If no current process, it returns <code>-1</code>.</li>
+                  </ul>
+                </li>
+                <li><strong>Look for an Exited Child:</strong>
+                  <ul>
+                    <li>Using <code>find_zombie_child(parent)</code>, the kernel scans the global process table for any child of the calling process that is in the <code>STATE_ZOMBIE</code>.</li>
+                    <li>If found:
+                      <ul>
+                        <li>If the caller provided a non‑NULL pointer <code>status</code>, the child’s saved <code>exit_status</code> is written there.</li>
+                        <li>The child’s PID is recorded, its PCB memory freed (<code>kfree</code>), and that PID is returned immediately to the parent.</li>
+                        <li>This handles the case where the child exited before the parent called <code>wait()</code>.</li>
+                      </ul>
+                    </li>
+                  </ul>
+                </li>
+                <li><strong>No Zombie Yet → Block the Parent:</strong>
+                  <ul>
+                    <li>If no zombie child is found, the parent cannot collect anything right now.</li>
+                    <li>The parent’s state is changed to <code>STATE_BLOCKED</code>.</li>
+                    <li>The kernel invokes <code>yield_syscall()</code>, which triggers a context switch to let another process run.</li>
+                    <li>From the parent’s perspective, <code>wait()</code> does not return until after it has been unblocked and a child has exited.</li>
+                  </ul>
+                </li>
+                <li><strong>Resuming After Block:</strong>
+                  <ul>
+                    <li>Eventually, when one of the parent’s children exits, that exit logic will mark the child <code>STATE_ZOMBIE</code> and enqueue any blocked parent.</li>
+                    <li>When the scheduler next picks this parent, execution continues just after the <code>yield_syscall()</code> call.</li>
+                  </ul>
+                </li>
+                <li><strong>Second Attempt to Collect:</strong>
+                  <ul>
+                    <li>After waking, <code>find_zombie_child(parent)</code> is called again.</li>
+                    <li>If a zombie child is now present:
+                      <ul>
+                        <li>Its exit status is stored into <code>*status</code>.</li>
+                        <li>Its PID is returned, and the zombie’s PCB is freed.</li>
+                      </ul>
+                    </li>
+                    <li>If somehow still no zombie child exists, the call fails with <code>-1</code>.</li>
+                  </ul>
+                </li>
+              </ul>
+            </ul>
 
-          <h3>2.5 Exit & Yield</h3>
-          <p>
-            <code>exit_syscall()</code> marks the calling process as a zombie and unblocks its parent if waiting. It then invokes <code>schedule()</code> to pick the next runnable process:
-          </p>
+            <h3>4. Exit Systemcall</h3>
           <pre><code>void exit_syscall(int status) {
-    PCB* proc = get_current_process();
-    proc->exit_status = status;
-    proc->state = STATE_ZOMBIE;
-    // Unblock parent
-    if (proc->parent && proc->parent->state == STATE_BLOCKED) {
-        proc->parent->state = STATE_READY;
-        enqueue_process(&ready_queue, proc->parent);
-    }
-    schedule(); // never returns
-}
+            debug_print("DEBUG: Exit syscall started with status:");
+            debug_int(status);
+            
+            // Get the current process
+            PCB* proc = get_current_process();
+            if (proc == NULL) {
+                debug_print("DEBUG: Exit failed - no current process");
+                return;
+            }
+            debug_print("DEBUG: Exiting process with PID:");
+            debug_int(proc->pid);
+        
+            proc->exit_status = status;
+            proc->state = STATE_ZOMBIE;
+            if (proc->parent != NULL && proc->parent->state == STATE_BLOCKED) {
+                proc->parent->state = STATE_READY;
+                enqueue_process(&ready_queue, proc->parent);
+            }
+            schedule();
+            
+            debug_print("DEBUG: Exit syscall - should not reach here");
+            while(1); 
+        }        
+          </code></pre>
+            <ul>
+              <ul>
+                <li><strong>Identify the Exiting Process:</strong>
+                  <ul>
+                    <li>It retrieves the PCB of the currently running process.</li>
+                    <li>If no current process exists, it logs an error and returns immediately.</li>
+                  </ul>
+                </li>
+                <li><strong>Record Exit Status and Change State:</strong>
+                  <ul>
+                    <li>The process’s <code>exit_status</code> field is set to the status code passed in.</li>
+                    <li>Its state is changed to <code>STATE_ZOMBIE</code>, indicating it has finished execution but has not yet been collected by its parent.</li>
+                  </ul>
+                </li>
+                <li><strong>Wake Up the Parent (if Waiting):</strong>
+                  <ul>
+                    <li>If this process has a parent and that parent is currently <code>STATE_BLOCKED</code> (due to <code>wait()</code>), the kernel:</li>
+                    <ul>
+                      <li>Changes the parent’s state to <code>STATE_READY</code>.</li>
+                      <li>Inserts the parent back into the ready queue so it will be scheduled soon.</li>
+                    </ul>
+                  </ul>
+                </li>
+                <li><strong>Perform a Context Switch:</strong>
+                  <ul>
+                    <li>The call hands control back to the scheduler, which will pick another process to run.</li>
+                    <li>Since the exiting process is now a zombie, it will no longer be considered runnable.</li>
+                  </ul>
+                </li>
+              </ul>
+              
+            </ul>
 
-void yield_syscall(void) {
-    PCB* proc = get_current_process();
-    // Save user SP, switch to kernel stack, and schedule
-    __asm__ volatile("lea (%%ebp), %0" : "=r"(proc->user_stack_ptr));
-    __asm__ volatile("movl %0, %%esp" : : "r"(proc->kernel_stack_ptr));
-    schedule();
-}
-</code></pre>
-        </section>
+            <h3>5. Yield Systemcall</h3>
+          <pre><code>void yield_syscall(void) {
+            uint32_t* stack_ptr;
+            
+            __asm__ volatile(
+                "lea (%%ebp), %0\n\t"
+                : "=r" (stack_ptr)
+            );
+        
+            PCB* proc = get_current_process();
+            if (proc == NULL) {
+                debug_print("DEBUG: Yield failed - no current process");
+                return;
+            }
+            
+            debug_print("DEBUG: Process yielding CPU has PID:");
+            debug_int(proc->pid);
+        
+            proc->user_stack_ptr = stack_ptr;
+        
+            asm volatile (
+                "movl %0, %%esp\n\t"  
+                :
+                : "r" (proc->kernel_stack_ptr)
+            );
+            schedule();
+            debug_print("DEBUG: Yield syscall - should not reach here");
+        }
+          </code></pre>
+            <ul>
+              <li>
+                <strong>Capture User Stack Pointer:</strong>
+                <ul>
+                  <li>
+                    <pre><code>lea (%ebp), stack_ptr</code></pre>
+                    Uses the current frame pointer (EBP) to compute the exact top‑of‑stack in user space. This value is stored in <code>stack_ptr</code>.
+                  </li>
+                </ul>
+              </li>
+              <li>
+                <strong>Get the Current PCB:</strong>
+                <ul>
+                  <li>
+                    Calls <code>get_current_process()</code>. If there is no process context, it logs an error and returns immediately.
+                  </li>
+                </ul>
+              </li>
+              <li>
+                <strong>Save User Context:</strong>
+                <ul>
+                  <li>
+                    Stores the captured <code>stack_ptr</code> into the PCB’s <code>user_stack_ptr</code>. This ensures, when the process is later rescheduled, it can resume its user‑mode stack exactly where it left off.
+                  </li>
+                </ul>
+              </li>
+              <li>
+                <strong>Switch to Kernel Stack:</strong>
+                <ul>
+                  <li>
+                    <pre><code>movl proc->kernel_stack_ptr, %esp</code></pre>
+                    This loads the process’s saved kernel‑mode stack pointer into <code>ESP</code>. From here on, the kernel is running on its own stack rather than the user’s. This is critical to avoid corrupting user data structures.
+                  </li>
+                </ul>
+              </li>
+              <li>
+                <strong>Invoke the Scheduler:</strong>
+                <ul>
+                  <li>
+                    Calls <code>schedule()</code>. Because the process has just saved its user‑mode context and switched to its kernel stack, <code>schedule()</code> can safely pick another process to run.
+                  </li>
+                </ul>
+              </li>
+            </ul>
+            </ul>
 
         <!-- Future Directions -->
         <section>
