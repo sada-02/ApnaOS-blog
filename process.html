@@ -84,18 +84,18 @@
 } PCB;
 </code></pre>
 <ul>
-  <li>→ <strong>pid:</strong> A unique identifier for each process.</li>
-  <li>→ <strong>state:</strong> The current state of the process (e.g., NEW, READY, RUNNING).</li>
-  <li>→ <strong>user_stack_ptr:</strong> Points to the current top of the process user-mode stack. On a context switch out of user mode, you save the stack pointer here so you can resume later.</li>
-  <li>→ <strong>program_counter:</strong> Holds the saved instruction pointer (EIP for 32-bit x86).</li>
-  <li>→ <strong>cr3:</strong> A special CPU control register on x86 architecture used by the CPU to locate the page table (base address of the page directory) of the process.</li>
-  <li>→ <strong>priority:</strong> A numeric priority value.</li>
-  <li>→ <strong>deadline:</strong> A deadline for the process to complete its task.</li>
-  <li>→ <strong>time_to_run:</strong> The remaining time the process has to run.</li>
-  <li>→ <strong>PCB* next:</strong> A pointer to the next PCB in the ready queue creating a chain.</li>
-  <li>→ <strong>PCB* next_in_table:</strong> Pointer used to link all PCBs in the global process table.</li>
-  <li>→ <strong>PCB* parent:</strong> Points to the PCB of the parent process.</li>
-  <li>→ <strong>exit_status:</strong> The exit status of the process.</li>
+  <li>→ <strong>pid</strong>: A unique identifier for each process.</li>
+  <li>→ <strong>state</strong>: The current state of the process (e.g., NEW, READY, RUNNING).</li>
+  <li>→ <strong>user_stack_ptr</strong>: Points to the current top of the process user-mode stack. On a context switch out of user mode, you save the stack pointer here so you can resume later.</li>
+  <li>→ <strong>program_counter</strong>: Holds the saved instruction pointer (EIP for 32-bit x86).</li>
+  <li>→ <strong>cr3</strong>: A special CPU control register on x86 architecture used by the CPU to locate the page table (base address of the page directory) of the process.</li>
+  <li>→ <strong>priority</strong>: A numeric priority value.</li>
+  <li>→ <strong>deadline</strong>: A deadline for the process to complete its task.</li>
+  <li>→ <strong>time_to_run</strong>: The remaining time the process has to run.</li>
+  <li>→ <strong>PCB* next</strong>: A pointer to the next PCB in the ready queue creating a chain.</li>
+  <li>→ <strong>PCB* next_in_table</strong>: Pointer used to link all PCBs in the global process table.</li>
+  <li>→ <strong>PCB* parent</strong>: Points to the PCB of the parent process.</li>
+  <li>→ <strong>exit_status</strong>: The exit status of the process.</li>
   <li>→ <strong>is_new_child:</strong> A flag that can help the scheduler or process manager know that this PCB was just created by fork().</li>
   <li>→ <strong>user_stack_base:</strong> Base address (lowest address) of the user-mode stack.</li>
   <li>→ <strong>kernel_stack_base:</strong> Base address of the kernel-mode stack to handle system calls and interrupts.</li>
@@ -112,97 +112,159 @@
   front: Points to the first PCB (next to be dequeued).
   rear: Points to the last PCB (where new PCBs are enqueued).
 </p>
-          <h3>2.2 PID Generation & Process Table</h3>
-          <p>
-            Each process gets a unique PID by incrementing <code>next_pid</code>:
-          </p>
-          <pre><code>static uint32_t next_pid = 1;
-uint32_t get_new_pid() {
-    return next_pid++;
-}
-</code></pre>
-          <p>
-            New PCBs are linked into a global <em>process table</em> so the kernel can track all processes for cleanup and resource management.
-          </p>
 
-          <h3>2.3 Ready Queue & Priority-based Enqueue</h3>
-          <p>
-            We maintain a <code>ProcessQueue</code> with <code>front</code> and <code>rear</code> pointers. To insert a process, <code>enqueue_process()</code> finds the proper position by priority:
-          </p>
-          <ol>
-            <li>If the queue is empty, both <code>front</code> and <code>rear</code> point to the new PCB.</li>
-            <li>If the new process has a higher priority (numeric <em>lower</em>) than the current front, insert at the beginning.</li>
-            <li>Otherwise, walk the list until finding a process with greater priority value, and insert before it. Equal priorities are enqueued in arrival order.</li>
-          </ol>
-          <pre><code>void enqueue_process(ProcessQueue* q, PCB* p) {
-    p->next = NULL;
-    if (is_queue_empty(q)) { /* empty */ }
-    else if (p->priority < q->front->priority) { /* front insertion */ }
-    else {
-        PCB* cur = q->front;
-        while (cur->next && cur->next->priority <= p->priority) {
-            cur = cur->next;
-        }
-        // insert after cur
-    }
-    // update q->rear if needed
+<h3>3. Initialisation</h3>
+<pre><code>uint32_t get_new_pid() { 
+  return next_pid++;
 }
 </code></pre>
+  <ul>
+    This function returns a new unique process ID.
+  </ul>
+<pre><code>void initialize_queue(ProcessQueue* queue) {
+  queue->front = NULL;
+  queue->rear = NULL;
+}          
+</code></pre>
+  <ul>
+    Initializes a process queue to be empty by setting both front and rear pointers to NULL.
+  </ul>
+  <pre><code>bool is_queue_empty(ProcessQueue* queue) {
+    return queue->front == NULL;
+}
+  </code></pre>
+    <ul>
+      Checks whether the queue has any processes. If the front is NULL, the queue is empty.
+    </ul>
+    
+    <h3>4. Enqueue Process</h3>
+          <p>
+            Enqueues a process based on priority
+          </p>
+          <pre><code>void enqueue_process(ProcessQueue* queue, PCB* process) {
+            process->next = NULL;
+            if (is_queue_empty(queue)) {
+                queue->front = process;
+                queue->rear = process;
+                return;
+            }
+            if (process->priority < queue->front->priority) {
+                process->next = queue->front;
+                queue->front = process;
+                return;
+            }
+        
+            PCB* current = queue->front;
+            while (current->next && current->next->priority <= process->priority) {
+                current = current->next;
+            }
+            process->next = current->next;
+            current->next = process;
+            if (process->next == NULL) {
+                queue->rear = process;
+            }
+        }        
+</code></pre>
+<ul>
+<li>If the queue is empty, add the process as both front and rear.</li>
+<li>If the process has higher priority than the current front, then insert it at the front.</li>
+<li>Otherwise, iterate through the queue and insert the process after all processes with higher or equal priority.</li>
+<li>If inserted at the end, update rear.</li>
+</ul>
 
-          <h3>2.4 Context Switching & Scheduler</h3>
-          <p>
-            The <code>schedule()</code> function embodies preemptive scheduling:
-          </p>
-          <ol>
-            <li>If <code>current_process</code> is running, mark it <code>READY</code> and re-enqueue it.</li>
-            <li>Dequeue the highest-priority ready process.</li>
-            <li>If none exists, enter the kernel’s CLI loop.</li>
-            <li>Otherwise, set its state to <code>RUNNING</code> and invoke an assembly stub to switch stacks:
-              <ul>
-                <li>Save the old kernel <code>ESP</code> into its PCB.</li>
-                <li>Load the new process’s kernel and user <code>ESP</code> and <code>EBP</code>.</li>
-                <li>Execute <code>ret</code> to resume user-mode <code>EIP</code>.</li>
-              </ul>
-            </li>
-          </ol>
-          <pre><code>void schedule() {
-    if (current_process) {
-        current_process->state = STATE_READY;
-        enqueue_process(&ready_queue, current_process);
-    }
-    PCB* next = dequeue_process(&ready_queue);
-    if (!next) { cli_loop(); }
-    next->state = STATE_RUNNING;
-    // assembly magic to swap ESP/EBP and ret
-}
-</code></pre>
+<p>
+  This implements Shortest Job First scheduling.
+</p>
+<pre><code>void enqueue_process_sjf(ProcessQueue* queue, PCB* process) {
+  process->next = NULL;
+  if (is_queue_empty(queue)) {
+      queue->front = process;
+      queue->rear = process;
+      return;
+  }
+  if (process->time_to_run < queue->front->time_to_run) {
+      process->next = queue->front;
+      queue->front = process;
+      return;
+  }
 
-          <h3>2.5 Process Creation (<code>create_process</code>)</h3>
-          <p>
-            To create a new process with a given <code>entry_point</code>, <code>stack_top</code>, and <code>priority</code>:
-          </p>
-          <ol>
-            <li>Allocate and initialize the PCB.</li>
-            <li>Assign PID, state <code>NEW</code>, and priority.</li>
-            <li>Set up the user-mode stack: reserve space, push the entry point (return address), and a dummy EBP.</li>
-            <li>Allocate a kernel stack via <code>kmalloc</code> and record its <code>ESP</code>.</li>
-            <li>Link into the global process table.</li>
-            <li>Mark state <code>READY</code> and enqueue.</li>
-          </ol>
-          <pre><code>PCB* create_process(uint32_t pid, uint32_t* entry, uint32_t* stack_top, int prio) {
-    PCB* p = kmalloc(sizeof(PCB));
-    p->pid = pid;
-    p->state = STATE_NEW;
-    p->priority = prio;
-    // prepare user stack
-    *(--stack_top) = (uint32_t)entry;
-    *(--stack_top) = 0;
-    p->user_stack_ptr = stack_top;
-    allocate_kernel_stack(p);
-    // add to process table & ready queue
-    return p;
+  PCB* current = queue->front;
+  while (current->next && current->next->time_to_run <= process->time_to_run) {
+      current = current->next;
+  }
+  process->next = current->next;
+  current->next = process;
+  if (process->next == NULL) {
+      queue->rear = process;
+  }
+}  
+</code></pre>
+<ul>
+<li>Processes are ordered based on <strong>time_to_run</strong> (how much CPU time they need).</li>
+<li>The process with the shortest time is scheduled first.</li>
+<li>Insert the process where <strong>time_to_run</strong> increases.</li>
+</ul>
+
+<p>
+  This uses Earliest Deadline First scheduling.
+</p>
+<pre><code>void enqueue_process_edf(ProcessQueue* queue, PCB* process) {
+  process->next = NULL;
+  if (is_queue_empty(queue)) {
+      queue->front = process;
+      queue->rear = process;
+      return;
+  }
+  if (process->deadline < queue->front->deadline) {
+      process->next = queue->front;
+      queue->front = process;
+      return;
+  }
+
+  PCB* current = queue->front;
+  while (current->next && current->next->deadline <= process->deadline) {
+      current = current->next;
+  }
+  process->next = current->next;
+  current->next = process;
+  if (process->next == NULL) {
+      queue->rear = process;
+  }
 }
 </code></pre>
+<ul>
+<li>Processes are sorted based on their <strong>deadline</strong> field.</li>
+<li>The one with the earliest (smallest) deadline runs first.</li>
+</ul>
+
+<h3>5. Dequeue Process</h3>
+<p>removes and returns the process at the front of the queue.</p>
+          <pre><code>PCB* dequeue_process(ProcessQueue* queue) {
+            if (is_queue_empty(queue)) {
+                return NULL;
+            }
+        
+            PCB* process = queue->front;
+            queue->front = queue->front->next;
+        
+            if (queue->front == NULL) {
+                queue->rear = NULL;
+            }
+        
+            process->next = NULL;
+            debug_print("DEBUG: Dequeued process has pid:");
+            debug_int(process->pid);
+            return process;
+        }        
+</code></pre>
+<ul>
+<li>If queue is empty, return NULL.</li>
+<li>Save the node at front.</li>
+<li>Advance front to front->next.</li>
+<li>If queue becomes empty after removal, set rear to NULL.</li>
+<li>Clear the removed node's next pointer.</li>
+<li>Return the removed node.</li>
+</ul>
 
         </section>
 
