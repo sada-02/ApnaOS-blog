@@ -41,165 +41,377 @@
           </ol>
         </section>
 
-        <!-- 2. Keyboard to Buffer -->
         <section>
-          <h2>2. Keyboard to Buffer</h2>
-          <p>
-            The IRQ-driven keyboard handler maps raw scancodes to ASCII using a lookup table. It implements rudimentary line editing:
-          </p>
-          <pre><code>void keyboard_handler() {
-    uint8_t sc = inb(KBD_DATA_PORT); // Read scancode
-    if (!(sc & 0x80)) {               // Key press
-        char c = scancode_to_ascii[sc];
-        switch (c) {
-        case '\n':                     // Enter key
-            input_buffer[idx] = '\0';
-            strcpy(input_line, input_buffer);
-            input_ready = 1;
-            print_to_screen("\n");
-            idx = 0;
-            break;
-        case '\b':                     // Backspace
-            if (idx > 0) {
-                idx--;
-                print_to_screen("\b \b");
-            }
-            break;
-        default:                       // Regular character
-            if (idx < BUFFER_SIZE - 1) {
-                input_buffer[idx++] = c;
-                print_to_screen((char[]){c,'\0'});
-            }
-        }
-    }
+          <h2>1. GDT</h2>
+          <h3>GDT data structures</h3>
+<pre><code>struct gdt_entry
+  {
+      uint16_t limit_low;  
+      uint16_t base_low;   
+      uint8_t base_middle;
+      uint8_t access;     
+      uint8_t granularity; 
+      uint8_t base_high;   
+  } __attribute__((packed));
+  </code></pre>
+    <ul>
+      <li><strong>limit_low</strong> & <strong>limit_high</strong> (in the top nibble of granularity) specify the 20‑bit segment limit.</li>
+      <li><strong>base_low</strong>, <strong>base_middle</strong>, and <strong>base_high</strong> together form the 32‑bit segment base address.</li>
+      <li><strong>access</strong> holds the segment’s type, descriptor privilege level, and present bit.</li>
+      <li><strong>granularity</strong> packs the high bits of the limit plus flags for 4 KiB granularity and 32‑bit mode.</li>
+    </ul>
+<pre><code>struct gdt_ptr
+  {
+      uint16_t limit; 
+      uint32_t base;  
+  } __attribute__((packed));
+  </code></pre>
+    <ul>
+      <li><strong>struct gdt_ptr</strong> describes the table itself for the <code>lgdt</code> instruction:</li>
+      <ul>
+        <li><strong>limit</strong> is the total size of all descriptors minus one.</li>
+        <li><strong>base</strong> is the linear address where the GDT array resides in memory.</li>
+      </ul>
+      A global array gdt[3] reserves space for three entries—typically the null descriptor, a code segment, and a data segment—and gp holds its pointer/size.
+</ul>
+<h3>GDT Functions</h3>
+<pre><code>static void gdt_set_gate(int num, unsigned long base, unsigned long limit,
+  uint8_t access, uint8_t gran)
+{
+gdt[num].base_low = (base & 0xFFFF);
+gdt[num].base_middle = (base >> 16) & 0xFF;
+gdt[num].base_high = (base >> 24) & 0xFF;
+
+gdt[num].limit_low = (limit & 0xFFFF);
+gdt[num].granularity = ((limit >> 16) & 0x0F);
+
+gdt[num].granularity |= (gran & 0xF0);
+gdt[num].access = access;
+}
+  </code></pre>
+    <ul>
+      <li><strong>Base Address Splitting:</strong> Masks and shifts the 32‑bit base into the three fields: low 16 bits, next 8 bits, and highest 8 bits.</li>
+      <li><strong>Limit Splitting:</strong> Masks the 20‑bit limit into the low 16 bits and the high 4 bits (stored in the low nibble of granularity).</li>
+      <li><strong>Granularity & Flags:</strong> ORs higher‑level flags (top nibble of gran) into the granularity byte, enabling features like 4 KiB granularity (G flag) and 32‑bit default operation size (D flag).</li>
+      <li><strong>Access Byte:</strong> Directly stores the access value (e.g. 0x9A for present, ring 0 code segment, executable/readable; 0x92 for present ring 0 data segment, writable).</li>
+    </ul>
+<pre><code>void gdt_install()
+  {
+      gp.limit = (sizeof(struct gdt_entry) * 3) - 1;
+      gp.base = (uint32_t)&gdt;
+  
+      gdt_set_gate(0, 0, 0, 0, 0);
+      gdt_set_gate(1, 0, 0xFFFFFFFF, 0x9A, 0xCF);
+      gdt_set_gate(2, 0, 0xFFFFFFFF, 0x92, 0xCF);
+  
+      gdt_flush((uint32_t)&gp);
+  }  
+  </code></pre>
+    <ul>
+      <li><strong>Pointer Setup:</strong> Computes <code>gp.limit</code> as the total table size minus one and sets <code>gp.base</code> to the address of the <code>gdt</code> array.</li>
+      <li><strong>Descriptor Initialization:</strong></li>
+      <ul>
+        <li>Entry 0 is the mandatory null descriptor (all fields zero).</li>
+        <li>Entry 1 is the kernel code segment spanning the full 4 GiB address space, with access <code>0x9A</code> and granularity <code>0xCF</code> (4 KiB pages, 32‑bit).</li>
+        <li>Entry 2 is the kernel data segment likewise spanning 4 GiB, with access <code>0x92</code> (data, read/write) and the same granularity.</li>
+      </ul>
+      <li><strong>Loading the GDT:</strong> Calls the external <code>gdt_flush</code> function (implemented in assembly) which executes <code>lgdt [gp]</code> and reloads segment registers so the new segments take effect.</li>
+    </ul>
+    <h3>gdt.asm</h3>
+<pre><code>global gdt_flush
+
+  gdt_flush:
+      lgdt [eax]         ; Load GDT pointed to by EAX.
+      
+      ; Update segment registers:
+      mov ax, 0x10       ; Data segment selector (2nd descriptor: index 2, so selector = 2*8 = 0x10)
+      mov ds, ax
+      mov es, ax
+      mov fs, ax
+      mov gs, ax
+      mov ss, ax
+  
+      ; Jump to flush the code segment register.
+      jmp 0x08:.flush   ; Code segment selector (1st descriptor after null: 1*8 = 0x08)
+  .flush:
+      ret  
+  </code></pre>
+    <ul>
+<li>Executes <code>lgdt [eax]</code>, loading the CPU’s GDTR from the address held in EAX (which points to your <code>gdt_ptr</code> structure).</li>
+<li>Sets up all data‑segment registers (<code>DS</code>, <code>ES</code>, <code>FS</code>, <code>GS</code>, <code>SS</code>) to selector <code>0x10</code> (the second GDT entry: flat kernel data segment).</li>
+<li>Performs a far jump (<code>jmp 0x08:.flush</code>) to reload <code>CS</code> with selector <code>0x08</code> (the first non‑null GDT entry: flat kernel code segment).</li>
+<li>The label <code>.flush</code> immediately follows, and the <code>ret</code> returns from this routine—by which point all segment registers reference your new, flat GDT descriptors.</li>
+    </ul>
+
+    <h2>2. IO</h2>
+<pre><code>static inline void outb(uint16_t port, uint8_t val)
+  {
+      asm volatile("outb %0, %1" : : "a"(val), "Nd"(port));
+  }
+  
+  static inline uint8_t inb(uint16_t port)
+  {
+      uint8_t ret;
+      asm volatile("inb %1, %0" : "=a"(ret) : "Nd"(port));
+      return ret;
+  }
+</code></pre>
+<ul>
+  <li><strong>outb(port, val):</strong> Emits an <code>outb</code> instruction to send the byte in AL to the specified I/O port, allowing the kernel to command hardware devices.</li>
+  <li><strong>inb(port):</strong> Performs an <code>inb</code> instruction, reading a byte from the given I/O port into AL and returning it—commonly used to poll or acknowledge PICs, keyboards, and other PCI‑mapped devices.</li>
+</ul>
+</ul> 
+
+    <h2>3. Keyboard</h2>
+    <h3>Scancode table</h3>
+<pre><code>static const char scancode_to_ascii[128] = {
+  0, 27, '1', '2', '3', '4', '5', '6',
+  '7', '8', '9', '0', '-', '=', '\b', '\t',
+  'q', 'w', 'e', 'r', 't', 'y', 'u', 'i',
+  'o', 'p', '[', ']', '\n', 0, 'a', 's',
+  'd', 'f', 'g', 'h', 'j', 'k', 'l', ';',
+  '\'', '`', 0, '\\', 'z', 'x', 'c', 'v',
+  'b', 'n', 'm', ',', '.', '/', 0, '*',
+  0, ' ', 0, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+};
+
+static const char scancode_to_ascii_shift[128] = {
+  0, 27, '!', '@', '#', '$', '%', '^',
+  '&', '*', '(', ')', '_', '+', '\b', '\t',
+  'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I',
+  'O', 'P', '{', '}', '\n', 0, 'A', 'S',
+  'D', 'F', 'G', 'H', 'J', 'K', 'L', ':',
+  '"', '~', 0, '|', 'Z', 'X', 'C', 'V',
+  'B', 'N', 'M', '<', '>', '?', 0, '*',
+  0, ' ', 0, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+};
+</code></pre>
+<ul>
+  <li>Scancode_to_ascii entries are either:</li>
+  <ul>
+    <li>0 for scancodes that don’t map to ASCII (e.g. modifier keys, unused codes).</li>
+    <li>Control bytes like 27 (Escape), '\b' (Backspace), '\t' (Tab), '\n' (Enter).</li>
+    <li>Printable characters ('a'–'z', '0'–'9', punctuation and symbols).</li>
+  </ul>
+  <li>Scancode_to_ascii_shift uses the same 0–127 scancode indices but maps to the shifted counterparts:</li>
+  <ul>
+    <li>Number keys become symbols ('1'→'!', '2'→'@', etc.).</li>
+    <li>Letters become uppercase ('a'→'A', …).</li>
+    <li>Punctuation flips to its Shift variant (';'→':', ','→'<', etc.).</li>
+    <li>All non‑printable or unchanged keys still map to 0 or the same control codes ('\b', '\n', etc.).</li>
+  </ul>
+</ul> 
+<h3>State Variables</h3>
+<ul>
+  <li><strong>shift_pressed:</strong> Tracks whether a Shift key is down.</li>
+  <li><strong>caps_lock_on:</strong> Toggles when the Caps Lock scancode is received.</li>
+  <li><strong>input_buffer:</strong> Accumulates characters until Enter.</li>
+  <li><strong>input_line</strong> and <strong>input_ready:</strong> Hand a completed line off to higher‑level code.</li>
+</ul>
+
+<h3>Keyboard Handler</h3>
+<pre><code>void keyboard_handler() {
+  uint8_t scancode = inb(KBD_DATA_PORT);
+
+  if (scancode == 0x2A || scancode == 0x36) {
+      shift_pressed = 1;
+      return;
+  } else if (scancode == 0xAA || scancode == 0xB6) {
+      shift_pressed = 0;
+      return;
+  }
+
+  if (scancode == 0x3A) {
+      caps_lock_on = !caps_lock_on;
+      return;
+  }
+
+  if (!(scancode & KBD_SCANCODE_RELEASE)) {
+      char key = 0;
+
+      if (shift_pressed) {
+          key = scancode_to_ascii_shift[scancode];
+      } else {
+          key = scancode_to_ascii[scancode];
+      }
+
+      if (key >= 'a' && key <= 'z') {
+          if (caps_lock_on ^ shift_pressed) {
+              key = key - 32;
+          }
+      }
+
+      if (key) {
+          if (key == '\n') {
+              input_buffer[buffer_index] = '\0';
+              int i = 0;
+              while (input_buffer[i] != '\0' && i < BUFFER_SIZE) {
+                  input_line[i] = input_buffer[i];
+                  i++;
+              }
+              input_line[i] = '\0';
+              input_ready = 1;
+              print_to_screen("\n");
+              buffer_index = 0;
+          } else if (key == '\b') {
+              if (buffer_index > 0) {
+                  buffer_index--;
+                  print_to_screen("\b \b");
+              }
+          } else {
+              if (buffer_index < BUFFER_SIZE - 1) {
+                  input_buffer[buffer_index++] = key;
+                  char buf[2] = {key, '\0'};
+                  print_to_screen(buf);
+              }
+          }
+      }
+  }
+} 
+</code></pre>
+<ul>
+  <li>Reads the latest scancode from I/O port 0x60.</li>
+  <li>If it’s a Shift‑down or Shift‑up code, sets or clears <code>shift_pressed</code>.</li>
+  <li>If it’s the Caps Lock code, toggles <code>caps_lock_on</code>.</li>
+  <li>Ignores all “key release” codes except Shift.</li>
+  <li>For a key‑press code:</li>
+  <ul>
+    <li>Selects the proper ASCII table (shifted vs. unshifted).</li>
+    <li>Applies Caps Lock logic for letters.</li>
+    <li>If the key is Enter (<code>'\n'</code>):</li>
+    <ul>
+      <li>Terminates <code>input_buffer</code> into <code>input_line</code>, sets <code>input_ready = 1</code>, echoes a newline, and resets the buffer index.</li>
+    </ul>
+    <li>If Backspace (<code>'\b'</code>):</li>
+      <li>Moves the buffer index back, erases the character on screen.</li>
+    </ul>
+    <li>Otherwise (printable character):</li>
+    <ul>
+      <li>Appends it to <code>input_buffer</code>, echoes it to the VGA display.</li>
+    </ul>
+  </ul>
+  </ul>
+
+  <h2>4. String</h2>
+  <h3>strlen</h3>
+<pre><code>size_t strlen(const char* str) {
+  size_t len = 0;
+  while (str[len]) len++;
+  return len;
 }
 </code></pre>
-          <p>
-            This handler runs in interrupt context, so it must be fast and non-blocking. Only when Enter is pressed do we signal <code>input_ready</code> to wake the parser.
-          </p>
-        </section>
-
-        <!-- 3. Blocking Read -->
-        <section>
-          <h2>3. Blocking Read Engine</h2>
-          <p>
-            <code>read_line()</code> implements cooperative waiting: the CPU halts until new input arrives, conserving resources:
-          </p>
-          <pre><code>void read_line(char *buf, int max_len) {
-    while (!input_ready) {
-        asm volatile("hlt"); // Wait for next interrupt
-    }
-    // Copy and reset flag
-    for (int i = 0; i < max_len - 1 && input_line[i]; i++) {
-        buf[i] = input_line[i];
-    }
-    buf[max_len - 1] = '\0';
-    input_ready = 0;
+<ul>
+  Walks the string one character at a time until it finds the terminating '\0', counting how many characters it saw. Returns that count.
+</ul> 
+<h3>memcpy</h3>
+<pre><code>void* memcpy(void* dest, const void* src, size_t n) {
+  char* d = dest;
+  const char* s = src;
+  while (n--) *d++ = *s++;
+  return dest;
 }
 </code></pre>
-        </section>
-
-        <!-- 4. Parsing & Tokenization -->
-        <section>
-          <h2>4. Parsing & Tokenization</h2>
-          <p>
-            We use a stateless <code>strtok()</code> to split on whitespace and preserve quoted strings if needed:
-          </p>
-          <pre><code>char *strtok(char *s, const char *delim) {
-    static char *p;
-    if (s) p = s;
-    if (!p) return NULL;
-    // Skip leading delimiters
-    while (*p && strchr(delim, *p)) p++;
-    if (!*p) return NULL;
-    char *tok = p;
-    // Find end of token
-    while (*p && !strchr(delim, *p)) p++;
-    if (*p) *p++ = '\0';
-    return tok;
+<ul>
+  Copies exactly n bytes from src to dest, advancing both pointers one byte at a time. Returns the original dest pointer.t.
+</ul> 
+<h3>memset</h3>
+<pre><code>void* memset(void* s, int c, size_t n) {
+  unsigned char* p = s;
+  while (n--) *p++ = (unsigned char)c;
+  return s;
 }
 </code></pre>
-          <p>
-            This simple approach can be extended for quoted strings or escape characters by enhancing the state machine.
-          </p>
-        </section>
-
-        <!-- 5. Command Dispatcher -->
-        <section>
-          <h2>5. Command Dispatcher (<code>cli_loop()</code>)</h2>
-          <p>
-            The heart of the shell: read, parse, dispatch. Errors or missing args trigger usage messages:
-          </p>
-          <pre><code>void cli_loop(void) {
-    char line[MAX_INPUT_LENGTH];
-    char *argv[MAX_ARGS];
-    while (1) {
-        print_to_screen("CLI> ");
-        read_line(line, sizeof(line));
-
-        // Tokenize into argv array
-        int argc = 0;
-        char *tok = strtok(line, " \t");
-        while (tok && argc < MAX_ARGS-1) {
-            argv[argc++] = tok;
-            tok = strtok(NULL, " \t");
-        }
-        argv[argc] = NULL;
-
-        if (argc == 0) continue;
-        // Dispatch table lookup
-        if      (strcmp(argv[0], "exit") == 0) break;
-        else if (strcmp(argv[0], "process") == 0) handle_process_cmd(argc, argv);
-        else if (strcmp(argv[0], "mkfile") == 0)  handle_mkfile(argc, argv);
-        else if (strcmp(argv[0], "readfile") == 0)handle_readfile(argc, argv);
-        else if (strcmp(argv[0], "writefile") == 0)handle_writefile(argc, argv);
-        else if (strcmp(argv[0], "appendfile") == 0)handle_appendfile(argc, argv);
-        else if (strcmp(argv[0], "rmfile") == 0)  handle_rmfile(argc, argv);
-        else if (strcmp(argv[0], "ls") == 0)      list_files();
-        else print_to_screen("Error: Unknown command\n");
-    }
-    print_to_screen("Exiting CLI...\n");
+<ul>
+  Fills n bytes of the buffer s with the byte value c, writing one byte at a time. Returns the original pointer s.
+</ul> 
+<h3>strcmp</h3>
+<pre><code>int strcmp(const char *s1, const char *s2) {
+  while (*s1 && (*s1 == *s2)) {
+      s1++;
+      s2++;
+  }
+  return *(const unsigned char*)s1 - *(const unsigned char*)s2;
 }
 </code></pre>
-        </section>
-
-        <!-- 6. Example Built‑In: Process -->
-        <section>
-          <h2>6. Example Built‑In: <code>process</code></h2>
-          <p>
-            Demonstrating a multi‑argument handler that creates and queues dummy processes:
-          </p>
-          <pre><code>void handle_process_cmd(int argc, char *argv[]) {
-    if (argc < 2) {
-        print_to_screen("Usage: process <name> [priority]\n");
-        return;
-    }
-    char *name = argv[1];
-    int prio   = (argc > 2) ? atoi(argv[2]) : DEFAULT_PRIO;
-    // Lookup in array of commands
-    for (int i=0; i<num_cmds; i++) {
-        if (strcmp(name, cmds[i].name)==0) {
-            uint32_t *st = kmalloc(STACK_SIZE);
-            create_process(get_new_pid(), cmds[i].entry, st+STACK_WORDS, prio);
-            return;
-        }
-    }
-    print_to_screen("Error: Unknown process\n");
+<ul>
+  Compares two null‑terminated strings lexicographically: advances through both while characters match and neither has hit '\0'. When they differ (or one ends), returns the difference between the first non‑matching characters (as unsigned bytes).
+</ul> 
+<h3>strncmp</h3>
+<pre><code>int strncmp(const char* s1, const char* s2, size_t n) {
+  while (n-- && *s1 && *s2) {
+      if (*s1 != *s2) return (unsigned char)*s1 - (unsigned char)*s2;
+      s1++;
+      s2++;
+  }
+  return n == (size_t)-1 ? 0 : (unsigned char)*s1 - (unsigned char)*s2;
 }
 </code></pre>
-        </section>
+<ul>
+  Like strcmp, but only up to n characters. Stops early if it hits a null or finds a mismatch. If it compared exactly n characters without difference, returns 0; otherwise returns the difference of the first unequal pair.
+</ul> 
+<h3>strncpy</h3>
+<pre><code>char* strncpy(char* dest, const char* src, size_t n) {
+  char* d = dest;
+  while (n-- && (*d++ = *src++));
+  while (n-- > 0) *d++ = '\0';
+  return dest;
+}
+</code></pre>
+<ul>
+  Copies up to n characters from src into dest. If src is shorter than n, pads the remainder of dest with '\0' bytes. Returns the original dest pointer.
+</ul> 
+<h3>strchr</h3>
+<pre><code>char *strchr(const char *s, int c) {
+  while (*s) {
+      if (*s == (char)c)
+          return (char*) s;
+      s++;
+  }
+  return 0;
+}
+</code></pre>
+<ul>
+  Scans s for the first occurrence of character c. If found, returns a pointer to that position in s; if not, returns NULL.
+</ul> 
+<h3>strtok</h3>
+<pre><code>char *strtok(char *str, const char *delim) {
+  static char *static_str = 0;
+  if (str) {
+      static_str = str;
+  }
+  if (!static_str) {
+      return 0;
+  }
+  while (*static_str && strchr(delim, *static_str)) {
+      static_str++;
+  }
+  if (*static_str == '\0') {
+      return 0;
+  }
+  char *token = static_str;
+  while (*static_str && !strchr(delim, *static_str)) {
+      static_str++;
+  }
+  if (*static_str) {
+      *static_str = '\0';
+      static_str++;
+  }
+  return token;
+}
+</code></pre>
+<ul>
+  Tokenizes a string by delimiter characters in delim. On the first call you pass in the string to split; subsequent calls pass NULL to continue where it left off. Skips any leading delimiters, then returns the next token (null‑terminated in place), advancing an internal pointer for the next call. Returns NULL when no tokens remain.
+</ul> 
 
-        <!-- 7. Error Handling & Feedback -->
+        <!-- Extensibility -->
         <section>
-          <h2>7. Error Handling & Feedback</h2>
-          <p>
-            Each built‑in validates <code>argc</code> and arguments. Failures print descriptive messages, e.g., "Error: File not found." Users see immediate feedback in the same prompt.
-          </p>
-        </section>
-
-        <!-- 8. Extensibility -->
-        <section>
-          <h2>8. Extensibility & Future Features</h2>
+          <h2>Extensibility & Future Features</h2>
           <ul>
             <li><strong>Tab Completion:</strong> Suggest commands and filenames.</li>
             <li><strong>Command History:</strong> Store past commands in a circular buffer.</li>
@@ -209,9 +421,9 @@
           </ul>
         </section>
 
-        <!-- 9. Conclusion -->
+        <!-- Conclusion -->
         <section>
-          <h2>9. Conclusion</h2>
+          <h2>Conclusion</h2>
           <p>
             ApnaOS’s CLI showcases how a kernel‑level shell can be constructed from low‑level primitives—interrupts, buffers, and simple parsers—yet remain highly extensible as the OS grows.
           </p>
