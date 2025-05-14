@@ -60,6 +60,7 @@
       <li><strong>base:</strong> The linear address of the first idt_entry.</li>
     </ul>
   </ul>
+          <h3>Functions</h3>
 <pre><code>void idt_set_gate(uint8_t num, uint32_t base, uint16_t sel, uint8_t flags)
   {
       idt[num].base_low = base & 0xFFFF;
