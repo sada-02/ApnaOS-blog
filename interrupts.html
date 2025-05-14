@@ -27,122 +27,282 @@
     <main>
       <article>
 
-        <!-- 1. Interrupt Architecture -->
+        <!-- IDT Setup -->
         <section>
-          <h2>1. Interrupt Architecture</h2>
-          <p>ApnaOS uses a modular interrupt management system inspired by x86 interrupt mechanisms. Key concepts:</p>
+          <h2>1. IDT </h2>
+          <h3>IDT data structures</h3>
+<pre><code>struct idt_entry
+  {
+      uint16_t base_low;
+      uint16_t sel; // Kernel segment selector
+      uint8_t always0;
+      uint8_t flags; // Type and attributes
+      uint16_t base_high;
+  } __attribute__((packed));
+  </code></pre>
+    <ul>
+      <li><strong>struct idt_entry:</strong> Defines a single interrupt descriptor with no padding (packed).</li>
+      <li><strong>base_low and base_high:</strong> Hold the low and high 16 bits of the interrupt handler’s address.</li>
+      <li><strong>sel:</strong> The code segment selector loaded into CS when the interrupt fires.</li>
+      <li><strong>always0:</strong> A reserved byte that must be zero.</li>
+      <li><strong>flags:</strong> Encodes gate type (interrupt gate), privilege level, and present bit.</li>
+    </ul>
+<pre><code>struct idt_ptr
+  {
+      uint16_t limit;
+      uint32_t base;
+  } __attribute__((packed));
+  </code></pre>
+  <ul>
+    <li><strong>struct idt_ptr:</strong> Holds the location and size of the IDT itself, suitable for the lidt instruction:</li>
+    <ul>
+      <li><strong>limit:</strong> The byte length of the table minus one.</li>
+      <li><strong>base:</strong> The linear address of the first idt_entry.</li>
+    </ul>
+  </ul>
+<pre><code>void idt_set_gate(uint8_t num, uint32_t base, uint16_t sel, uint8_t flags)
+  {
+      idt[num].base_low = base & 0xFFFF;
+      idt[num].base_high = (base >> 16) & 0xFFFF;
+      idt[num].sel = sel;
+      idt[num].always0 = 0;
+      idt[num].flags = flags;
+  }</code></pre>
+  <ul>
+    <li>Splits a 32‑bit handler address (base) into two 16‑bit halves and stores them in base_low and base_high.</li>
+    <li>Stores the segment selector (sel) that the CPU will switch to when calling the handler.</li>
+    <li>Clears the reserved always0 byte.</li>
+    <li>Stores the descriptor’s flags (e.g., present bit and type 0x8E for a 32‑bit interrupt gate).</li>
+  </ul>
+<pre><code>void idt_install()
+  {
+      for (int i = 0; i < 32; i++)
+      {
+          idt_set_gate(i, (uint32_t)isr_stub, 0x08, 0x8E);
+      }
+      idtp.limit = (sizeof(struct idt_entry) * 256) - 1;
+      idtp.base = (uint32_t)&idt;
+      idt_load((uint32_t)&idtp);
+  }</code></pre>
+  <ul>
+    <li>Iterates over the first 32 entries (CPU exceptions).</li>
+    <li>For each entry <code>i</code>, calls <code>idt_set_gate(i, isr_stub, 0x08, 0x8E)</code>, pointing all of them at the same assembly stub.</li>
+    <li>Sets <code>idtp.limit</code> to the total size of 256 descriptors minus one.</li>
+    <li>Sets <code>idtp.base</code> to the address of the <code>idt</code> array.</li>
+    <li>Calls the external <code>idt_load</code> function (which wraps the <code>lidt</code> instruction) to load the new IDT into the CPU.</li>
+  </ul>
+
+  <h2>2. Interrupts</h2>
+        <h3>Handlers</h3>
+<pre><code>interrupt_handler_t interrupt_handlers[IDT_ENTRIES];
+
+  void register_interrupt_handler(uint8_t n, interrupt_handler_t handler)
+  {
+      interrupt_handlers[n] = handler;
+  }
+  
+  void irq_handler(uint8_t irq)
+  {
+      if (interrupt_handlers[irq + 32])
+      {
+          interrupt_handlers[irq + 32]();
+      }
+  }
+  
+  void common_irq_handler(uint32_t irq_num)
+  {
+      uint8_t irq = irq_num & 0xFF; 
+      irq_handler(irq);
+      if (irq >= 8)
+      {
+          outb(0xA0, 0x20);
+      }
+      outb(0x20, 0x20); 
+  }
+  </code></pre>
+    <ul>
+      <li><strong>interrupt_handlers Array:</strong>
+      <ul>
+        <li>Holds function pointers for each interrupt or IRQ entry, indexed by interrupt number (0–255).</li>
+      </ul>
+      </li>
+      <li><strong>register_interrupt_handler:</strong>
+      <ul>
+        <li>Stores a user‑provided handler function into the interrupt_handlers array at index n.</li>
+      </ul>
+      </li>
+      <li><strong>irq_handler:</strong>
+      <ul>
+        <li>Given a hardware IRQ number (0–15), checks if a handler is registered at entry irq + 32 (since IRQs are mapped to IDT entries 32–47) and calls it if present.</li>
+      </ul>
+      </li>
+      <li><strong>common_irq_handler:</strong>
+      <ul>
+        <li>Receives the raw interrupt number irq_num (from the CPU state pushed by the stub).</li>
+        <li>Masks to 8 bits to get the IRQ index and invokes irq_handler.</li>
+        <li>If the IRQ came from the slave PIC (IRQ 8–15), sends an End‑of‑Interrupt (EOI) command to the slave PIC at port 0xA0.</li>
+        <li>Always sends an EOI to the master PIC at port 0x20 so the PICs can issue further interrupts.</li>
+      </ul>
+      </li>
+    </ul>
+    </ul>
+
+    <h3>IRQ Stubs</h3>
+    <pre><code>extern void irq0_stub();
+      extern void irq1_stub();
+      extern void irq2_stub();
+      extern void irq3_stub();
+      extern void irq4_stub();
+      extern void irq5_stub();
+      extern void irq6_stub();
+      extern void irq7_stub();
+      extern void irq8_stub();
+      extern void irq9_stub();
+      extern void irq10_stub();
+      extern void irq11_stub();
+      extern void irq12_stub();
+      extern void irq13_stub();
+      extern void irq14_stub();
+      extern void irq15_stub();
+      
+      void irq_install()
+      {
+          idt_set_gate(32, (uint32_t)irq0_stub, 0x08, 0x8E);
+          idt_set_gate(33, (uint32_t)irq1_stub, 0x08, 0x8E);
+          idt_set_gate(34, (uint32_t)irq2_stub, 0x08, 0x8E);
+          idt_set_gate(35, (uint32_t)irq3_stub, 0x08, 0x8E);
+          idt_set_gate(36, (uint32_t)irq4_stub, 0x08, 0x8E);
+          idt_set_gate(37, (uint32_t)irq5_stub, 0x08, 0x8E);
+          idt_set_gate(38, (uint32_t)irq6_stub, 0x08, 0x8E);
+          idt_set_gate(39, (uint32_t)irq7_stub, 0x08, 0x8E);
+          idt_set_gate(40, (uint32_t)irq8_stub, 0x08, 0x8E);
+          idt_set_gate(41, (uint32_t)irq9_stub, 0x08, 0x8E);
+          idt_set_gate(42, (uint32_t)irq10_stub, 0x08, 0x8E);
+          idt_set_gate(43, (uint32_t)irq11_stub, 0x08, 0x8E);
+          idt_set_gate(44, (uint32_t)irq12_stub, 0x08, 0x8E);
+          idt_set_gate(45, (uint32_t)irq13_stub, 0x08, 0x8E);
+          idt_set_gate(46, (uint32_t)irq14_stub, 0x08, 0x8E);
+          idt_set_gate(47, (uint32_t)irq15_stub, 0x08, 0x8E);
+      }
+      </code></pre>
+      <ul>
+        <li><strong>IRQ Stub Declarations:</strong>
           <ul>
-            <li><strong>Interrupt Descriptor Table (IDT):</strong> Maps interrupt vectors (0–255) to handler functions.</li>
-            <li><strong>Exceptions:</strong> Vectors 0–31 are reserved for CPU exceptions like divide-by-zero, page faults, and general protection faults.</li>
-            <li><strong>Programmable Interrupt Controller (PIC):</strong> Remapped to vectors 32–47 to avoid overlap with CPU exceptions.</li>
-            <li><strong>IRQ Mapping:</strong> Hardware interrupts (keyboard, timer, etc.) map to IRQ numbers remapped via PIC.</li>
+        <li>irq0_stub through irq15_stub are external assembly entry points—one per hardware IRQ line.</li>
+        <li>These stubs save registers, push the IRQ number, and jump to common_irq_handler.</li>
           </ul>
-        </section>
-
-        <!-- 2. IDT Setup -->
-        <section>
-          <h2>2. IDT Initialization</h2>
-          <p>The IDT is a table of descriptors where each entry tells the CPU how to handle a specific interrupt:</p>
-<pre><code>typedef struct {
-    uint16_t offset_low;
-    uint16_t selector;
-    uint8_t zero;
-    uint8_t type_attr;
-    uint16_t offset_high;
-} __attribute__((packed)) idt_entry_t;
-
-idt_entry_t idt[256];</code></pre>
-          <p>Each entry is initialized with a function pointer (handler) to the corresponding ISR:</p>
-<pre><code>void set_idt_gate(int n, uint32_t handler) {
-    idt[n].offset_low = handler & 0xFFFF;
-    idt[n].selector = 0x08; // Kernel code segment
-    idt[n].zero = 0;
-    idt[n].type_attr = 0x8E; // Present, ring 0, 32-bit interrupt gate
-    idt[n].offset_high = (handler >> 16) & 0xFFFF;
-}</code></pre>
-          <p>Finally, we load the IDT using the lidt instruction:</p>
-<pre><code>typedef struct {
-    uint16_t limit;
-    uint32_t base;
-} __attribute__((packed)) idt_ptr_t;
-
-idt_ptr_t idt_reg = {
-    .limit = sizeof(idt) - 1,
-    .base = (uint32_t)&idt
-};
-
-extern void load_idt(uint32_t);
-load_idt((uint32_t)&idt_reg);</code></pre>
-        </section>
-
-        <!-- 3. IRQ Remapping -->
-        <section>
-          <h2>3. IRQ Remapping</h2>
-          <p>By default, the PIC maps IRQs to vectors 0–15, overlapping with CPU exceptions. We remap them to 32–47 using:</p>
-<pre><code>#define PIC1 0x20
-#define PIC2 0xA0
-#define PIC1_COMMAND PIC1
-#define PIC1_DATA (PIC1+1)
-#define PIC2_COMMAND PIC2
-#define PIC2_DATA (PIC2+1)
-
-outb(PIC1_COMMAND, 0x11);
-outb(PIC2_COMMAND, 0x11);
-outb(PIC1_DATA, 0x20);
-outb(PIC2_DATA, 0x28);
-outb(PIC1_DATA, 0x04);
-outb(PIC2_DATA, 0x02);
-outb(PIC1_DATA, 0x01);
-outb(PIC2_DATA, 0x01);</code></pre>
-        </section>
-
-        <!-- 4. ISRs and IRQ Handlers -->
-        <section>
-          <h2>4. ISRs and IRQ Handlers</h2>
-          <p>ISRs are the core of interrupt handling. Assembly stubs handle low-level context saving and call C handlers:</p>
-<pre><code>isr_stub:
-    pusha
-    call isr_handler
-    popa
-    iret</code></pre>
-          <p>Example C handler for a timer interrupt:</p>
-<pre><code>__attribute__((interrupt)) void isr_timer(void* frame) {
-    tick_count++;
-    outb(0x20, 0x20); // Send EOI to PIC
-}</code></pre>
-          <p>Handlers must acknowledge the PIC and should execute quickly to avoid interrupt flooding.</p>
-        </section>
-
-        <!-- 5. Nesting and Prioritization -->
-        <section>
-          <h2>5. Nesting and Prioritization</h2>
-          <p>ApnaOS disables interrupts inside ISRs to avoid reentry issues. However, it can be extended to support nested interrupts with priority masking:</p>
+        </li>
+        <li><strong>irq_install:</strong>
           <ul>
-            <li><strong>Nested Interrupts:</strong> Save full CPU state and re-enable interrupts temporarily inside handlers if needed.</li>
-            <li><strong>Priority:</strong> Configurable through PIC IMR (Interrupt Mask Register) or future support via APIC.</li>
-            <li><strong>Masking:</strong> Selectively enable/disable specific IRQ lines during critical sections.</li>
-          </ul>
-        </section>
-
-        <!-- 6. Software Interrupts -->
-        <section>
-          <h2>6. Software Interrupts</h2>
-          <p>These are manually invoked interrupts used for features like system calls or breakpoints:</p>
-<pre><code>int 0x80   ; Traditional syscall entry point
-int 0x03   ; Debugging breakpoint used by debuggers like GDB</code></pre>
-          <p>The handlers for these are also defined in the IDT and can be implemented for syscall dispatching or logging.</p>
-        </section>
-
-        <!-- 7. Debugging and Diagnostics -->
-        <section>
-          <h2>7. Debugging and Diagnostics</h2>
+        <li>Calls idt_set_gate for IDT entries 32 through 47.</li>
+        <li>Installs each IRQ stub with:
           <ul>
-            <li><strong>Spurious IRQs:</strong> IRQ7 and IRQ15 can fire without real cause; OS checks interrupt status before handling.</li>
-            <li><strong>Double Faults:</strong> Occur when an exception occurs while servicing another; handled via a dedicated TSS and handler.</li>
-            <li><strong>Logging:</strong> ISR context includes instruction pointer, error code, and register snapshot for diagnostics.</li>
-            <li><strong>Trap Handlers:</strong> For exceptions like page faults, log CR2 and faulting address for debugging memory issues.</li>
+            <li>Kernel code segment selector: 0x08.</li>
+            <li>Flags: 0x8E (present, ring 0, 32-bit interrupt gate).</li>
           </ul>
-        </section>
+        </li>
+          </ul>
+        </li>
+        <li><strong>Result:</strong>
+          <ul>
+        <li>Hardware IRQs 0–15 vector through these IDT entries into common_irq_handler.</li>
+        <li>common_irq_handler then invokes any registered handlers.</li>
+          </ul>
+        </li>
+      </ul>
+      </ul>
+
+      <h2>3. pic </h2>
+<pre><code>void pic_remap()
+  {
+      uint8_t a1 = inb(0x21); 
+      uint8_t a2 = inb(0xA1);
+  
+      outb(0x20, 0x11);
+      outb(0xA0, 0x11);
+  
+      outb(0x21, 0x20); 
+      outb(0xA0, 0x28); 
+  
+      outb(0x21, 0x04);
+      outb(0xA0, 0x02); 
+  
+      outb(0x21, 0x01);
+      outb(0xA0, 0x01);
+      a1 &= ~(1 << 1);
+      outb(0x21, a1); 
+      outb(0xA0, a2);
+  }
+  </code></pre>
+    <ul>
+<li>Reads the current interrupt mask bytes from the master (0x21) and slave (0xA1) PIC data ports into a1 and a2.</li>
+<li>Sends the Initialization Command Word 1 (0x11) to both master command port (0x20) and slave command port (0xA0) to begin PIC initialization in cascade mode.</li>
+<li>Sends Initialization Command Word 2 to set new vector offsets: master to 0x20 (IRQ0–7 → INT 32–39) and slave to 0x28 (IRQ8–15 → INT 40–47).</li>
+<li>Sends Initialization Command Word 3 to establish the IRQ line wiring: master receives slave on IRQ2 (0x04), slave tells it’s cascaded at IRQ line 2 (0x02).</li>
+<li>Sends Initialization Command Word 4 (0x01) to both PICs to select 8086/88 (MCS‑80/85) mode.</li>
+<li>Restores the master PIC’s saved mask (a1), unmasking IRQ1 (keyboard), and restores the slave PIC’s mask from a2.</li>
+    </ul>
+
+      <h2>4. IRQ </h2>
+<pre><code>; irq.asm
+  [bits 32]
+  
+  global irq0_stub, irq1_stub, irq2_stub, irq3_stub, irq4_stub
+  global irq5_stub, irq6_stub, irq7_stub, irq8_stub, irq9_stub
+  global irq10_stub, irq11_stub, irq12_stub, irq13_stub, irq14_stub, irq15_stub
+  extern common_irq_handler
+  
+  %macro IRQ_STUB 1
+  irq%1_stub:
+      pusha                  ; Save registers
+      push dword %1        ; <-- Push the IRQ number as a full 32-bit value
+      call common_irq_handler
+      add esp, 4           ; Clean up the pushed 32-bit argument
+      popa                 ; Restore registers
+      iretd                ; Return from interrupt
+  %endmacro
+  
+  IRQ_STUB 0
+  IRQ_STUB 1
+  IRQ_STUB 2
+  IRQ_STUB 3
+  IRQ_STUB 4
+  IRQ_STUB 5
+  IRQ_STUB 6
+  IRQ_STUB 7
+  IRQ_STUB 8
+  IRQ_STUB 9
+  IRQ_STUB 10
+  IRQ_STUB 11
+  IRQ_STUB 12
+  IRQ_STUB 13
+  IRQ_STUB 14
+  IRQ_STUB 15
+  </code></pre>
+    <ul>
+      <ul>
+        <li><strong>[bits 32]:</strong> All code here is assembled for 32-bit protected mode.</li>
+        <li><strong>Global symbols:</strong>
+          <ul>
+            <li>Each <code>irqN_stub</code> label becomes an externally visible symbol so that your C loader code (via <code>idt_set_gate</code>) can point an IDT entry at it.</li>
+            <li><code>common_irq_handler</code> is an external (C) function provided elsewhere; these stubs will transfer control to it.</li>
+          </ul>
+        </li>
+        <li><strong>%macro IRQ_STUB 1:</strong> Defines a macro taking one argument (the IRQ number). Each invocation creates a block of code that:
+          <ul>
+            <li><strong>Label:</strong> <code>irqN_stub:</code> marks the start of the Nth stub.</li>
+            <li><strong>pusha:</strong> Pushes all general-purpose registers (EAX, ECX, EDX, EBX, ESP, EBP, ESI, EDI) onto the stack, preserving the full CPU context.</li>
+            <li><strong>push dword N:</strong> Places the IRQ number (0–15) on the stack as a 32-bit value so that <code>common_irq_handler(uint32_t irq_num)</code> knows exactly which line fired.</li>
+            <li><strong>call common_irq_handler:</strong> Jumps into your C handler, which will look up and invoke any registered C callback for that IRQ.</li>
+            <li><strong>add esp, 4:</strong> Cleans up the one argument pushed (the IRQ number), restoring the stack to how it was right after <code>pusha</code>.</li>
+            <li><strong>popa:</strong> Pops back all general-purpose registers in the reverse order, restoring the CPU state exactly as it was before <code>pusha</code>.</li>
+            <li><strong>iretd:</strong> The protected-mode “interrupt return” instruction. It pops EIP, CS, and EFLAGS off the stack, returning execution to whatever code was interrupted in user or kernel mode.</li>
+          </ul>
+        </li>
+        <li><strong>Macro Invocations:</strong> Expands into sixteen stubs, <code>irq0_stub</code> through <code>irq15_stub</code>, each pushing its own IRQ number.</li>
+      </ul>
+
+    </ul>
 
         <!-- 8. Future Enhancements -->
         <section>
