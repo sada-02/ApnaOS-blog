@@ -113,7 +113,7 @@
   rear: Points to the last PCB (where new PCBs are enqueued).
 </p>
 
-<h3>3. Initialisation</h3>
+<h3>3. Initialisation and Helper functions</h3>
 <pre><code>uint32_t get_new_pid() { 
   return next_pid++;
 }
@@ -136,6 +136,16 @@
     <ul>
       Checks whether the queue has any processes. If the front is NULL, the queue is empty.
     </ul>
+
+    <pre><code>void init_process_management() {
+      initialize_queue(&ready_queue);
+      debug_print("DEBUG: Process queues initialized.");
+      debug_print("DEBUG: Process management system initialized.");
+  }
+    </code></pre>
+      <ul>
+        A call to the queue-initialization routine simply sets both the front and rear pointers of the ready queue to NULL.
+      </ul>
     
     <h3>4. Enqueue Process</h3>
           <p>
@@ -264,6 +274,258 @@
 <li>If queue becomes empty after removal, set rear to NULL.</li>
 <li>Clear the removed node's next pointer.</li>
 <li>Return the removed node.</li>
+</ul>
+
+<h3>6. Kernel Stack Allocation</h3>
+          <pre><code>void allocate_kernel_stack(PCB* process) {
+            process->kernel_stack_base = (uint32_t*)kmalloc(KERNEL_STACK_SIZE);
+            process->kernel_stack_ptr = process->kernel_stack_base + (KERNEL_STACK_SIZE/sizeof(uint32_t));
+        }          
+</code></pre>
+<ul>
+  <li><strong>kmalloc(KERNEL_STACK_SIZE):</strong>
+    <ul>
+      <li>Allocates a contiguous KERNEL_STACK_SIZE byte region from the kernel heap.</li>
+      <li>Returns a byte pointer, casted to uint32_t* (word sized arithmetic).</li>
+    </ul>
+  </li>
+  <li><strong>kernel_stack_base:</strong>
+    <ul>
+      <li>Points to the start (low address) of this newly allocated kernel stack.</li>
+    </ul>
+  </li>
+  <li><strong>kernel_stack_ptr:</strong>
+    <ul>
+      <li>Initialized to point to one word past the top of the stack region.</li>
+      <li>Since stacks on x86 grow downward, you want the stack pointer (ESP) to start at the highest address in the region.</li>
+      <li>Dividing by sizeof(uint32_t) converts bytes into 32-bit words.</li>
+    </ul>
+  </li>
+</ul>
+</ul>
+
+<h3>7. Schedule</h3>
+<p>Decides which process runs next and performs the necessary context switch.</p>
+          <pre><code>void schedule() {
+            // 1) Preempt the running process, if any
+            if (current_process != NULL) {
+                if (current_process->state == STATE_RUNNING) {
+                    current_process->state = STATE_READY;
+                    enqueue_process(&ready_queue, current_process);
+                }
+            }
+        
+            // 2) Pick the next process to run
+            PCB* next_process = dequeue_process(&ready_queue);
+            if (next_process == NULL) {
+                debug_print("DEBUG: No more processes in ready queue");
+                cli_loop();   // Halt or enter idle loop
+                while (1);
+            }
+        
+            next_process->state = STATE_RUNNING;
+        
+            debug_print("DEBUG: Switching to process:");
+            debug_int(next_process->pid);
+        
+            // 3) Handle a newly forked child (first time it runs)
+            if (next_process->is_new_child) {
+                next_process->is_new_child = false;
+                
+                current_process = next_process;
+        
+                // Switch directly into user mode context saved in user_stack_ptr:
+                __asm__ volatile (
+                    "xorl %%eax, %%eax\n\t"     // Return value 0 from fork()
+                    "movl %0, %%esp\n\t"        // Load user-mode stack pointer
+                    "popl %%ebp\n\t"            // Restore base pointer
+                    "ret\n\t"                   // Return into user code
+                    : : "r" (next_process->user_stack_ptr) : "eax"
+                );
+            }
+        
+            // 4) Save the kernel stack pointer of the outgoing process
+            if (current_process != NULL) {
+                __asm__ volatile (
+                    "movl %%esp, %0\n\t"        // Store ESP into current_process->kernel_stack_ptr
+                    : "=m" (current_process->kernel_stack_ptr)
+                );
+            }
+        
+            // 5) Update current_process and restore the next process’s user context
+            current_process = next_process;
+        
+            __asm__ volatile (
+                "movl %0, %%esp\n\t"           // Load the next process’s user-mode stack pointer
+                "popl %%ebp\n\t"               // Restore its EBP
+                "ret\n\t"                      // Resume execution at its saved EIP
+                : : "r" (next_process->user_stack_ptr)
+            );
+        }               
+</code></pre>
+<ul>
+<ul>
+  <li><strong>Preemption of the current process:</strong>
+    <ul>
+      <li>If there is a running process, mark it <code>STATE_READY</code> and re-enqueue it so it can run again later.</li>
+    </ul>
+  </li>
+  <li><strong>Selecting the next process:</strong>
+    <ul>
+      <li>Dequeue the highest-priority (or earliest-deadline, etc.) PCB from <code>ready_queue</code>.</li>
+      <li>If the queue is empty, the kernel goes into an idle loop (<code>cli_loop()</code>).</li>
+    </ul>
+  </li>
+  <li><strong>New child handling:</strong>
+    <ul>
+      <li>Newly forked processes need to jump straight into their user-mode entry point.</li>
+      <li>We load their user-stack pointer, pop a saved base pointer, and <code>ret</code> into user code.</li>
+      <li>We also zero out <code>EAX</code> so that the child's <code>fork()</code> returns 0, as per the UNIX convention.</li>
+      <pre><code>__asm__ volatile (
+  "xorl %%eax, %%eax\n\t"  
+  "movl %0, %%esp\n\t"     
+  "popl %%ebp\n\t"        
+  "ret\n\t"               
+  : : "r" (next_process->user_stack_ptr) : "eax"
+);
+</code></pre>
+      <ul>
+        <li>Zeroes the <code>EAX</code> register.</li>
+        <li>Loads the child's saved user-mode stack pointer into <code>ESP</code>.</li>
+        <li>Pops the previous base pointer off the user stack into <code>EBP</code>.</li>
+        <li>Pops the return address from the user stack into <code>EIP</code> and jumps there.</li>
+      </ul>
+    </ul>
+  </li>
+  <li><strong>Saving kernel stack of the outgoing process:</strong>
+    <ul>
+      <li>Before switching away, we store the current value of <code>ESP</code> into the outgoing PCB's <code>kernel_stack_ptr</code>.</li>
+      <pre><code>if (current_process != NULL) {
+  __asm__ volatile (
+      "movl %%esp, %0\n\t"
+      : "=m" (current_process->kernel_stack_ptr)
+  );
+}
+</code></pre>
+      <ul>
+        <li>Takes the current <code>ESP</code> (which is pointing into the kernel stack) and stores it into the PCB's <code>kernel_stack_ptr</code> field.</li>
+        <li>This memory output is expressed as <code>=m</code>, telling the compiler “write to this memory location.”</li>
+      </ul>
+    </ul>
+  </li>
+  <li><strong>Restoring the next process's context:</strong>
+    <ul>
+      <li>Update <code>current_process</code> to our new PCB.</li>
+      <li>Load its saved user-mode stack pointer into <code>ESP</code>, pop <code>EBP</code>, and <code>ret</code> to resume at its saved instruction pointer.</li>
+      <pre><code>__asm__ volatile (
+  "movl %0, %%esp\n\t"    // 1
+  "popl %%ebp\n\t"        // 2
+  "ret\n\t"               // 3
+  : : "r" (next_process->user_stack_ptr)
+);
+</code></pre>
+      <ul>
+        <li>Load the user-mode stack pointer of the next process into <code>ESP</code>.</li>
+        <li>Restore the base pointer of the next process's stack frame.</li>
+        <li>Pop the saved return address and jump to it, resuming execution at that instruction in user code.</li>
+      </ul>
+    </ul>
+  </li>
+</ul>
+</ul>
+
+<h3>8. Create Process</h3>
+<p>Allocates and initializes a new process, sets up its user and kernel stacks, links it into the global process table, and finally makes it runnable.</p>
+          <pre><code>PCB* create_process(uint32_t pid, uint32_t* entry_point, int priority, int deadline, int time_to_run) {
+            PCB* new_process = (PCB*) kmalloc(sizeof(PCB));
+            if (new_process == NULL) {
+                return NULL;
+            }
+        
+            uint32_t *stack_top = (uint32_t *) kmalloc(4096);
+            if (!stack_top) {
+                return NULL;
+            }
+            stack_top += 4096 / sizeof(uint32_t);
+        
+            new_process->pid = pid;
+            new_process->state = STATE_NEW;
+            new_process->priority = priority;  
+            new_process->deadline = deadline;
+            new_process->time_to_run = time_to_run;
+            new_process->user_stack_base = stack_top - 1024;
+            *(--stack_top) = (uint32_t)entry_point;
+            *(--stack_top) = 0x0;
+            
+            new_process->user_stack_ptr = stack_top;
+            new_process->program_counter = entry_point;
+        
+            new_process->cr3 = 0;
+            new_process->next = NULL;
+        
+            allocate_kernel_stack(new_process);
+            new_process->next_in_table = process_table_head;
+            process_table_head = new_process;
+        
+            new_process->state = STATE_READY;
+            enqueue_process(&ready_queue, new_process);
+            return new_process;
+        }
+</code></pre>
+<ul>
+  <li><strong>Allocating the PCB:</strong>
+    <ul>
+      <li>A new Process Control Block (PCB) structure is reserved from the kernel’s heap.</li>
+      <li>This block will hold all of the process’s metadata: its ID, state, scheduling parameters, pointers to stacks, and linkage in various lists.</li>
+    </ul>
+  </li>
+  <li><strong>Building User Stack:</strong>
+    <ul>
+      <li>A fresh 4 KB region is carved out to serve as the process’s user‑mode stack.</li>
+      <li>Because x86 stacks grow downward, we position our “stack top” at the highest address of this block.</li>
+      <li>We then place two initial words on that stack:
+        <ul>
+          <li>A zero value to act as an initial frame pointer (EBP).</li>
+          <li>The address of the process’s entry point, so that when we later perform a return into user space, execution jumps directly to the start of the user program.</li>
+        </ul>
+      </li>
+      <li>We record both the bottom of the user stack (for bounds checking) and the current stack pointer (so we know where to resume).</li>
+    </ul>
+  </li>
+  <li><strong>Setting PCB Fields:</strong>
+    <ul>
+      <li>The unique process ID passed in.</li>
+      <li>The initial state (briefly NEW, then switched to READY).</li>
+      <li>Scheduling parameters:
+        <ul>
+          <li>Priority for priority scheduling.</li>
+          <li>A deadline for EDF.</li>
+          <li>An estimated CPU time for SJF.</li>
+        </ul>
+      </li>
+      <li>A placeholder CR3 (page table pointer) until virtual memory is set up.</li>
+      <li>Links initialized to null for the ready‑queue pointer and initial table pointer.</li>
+    </ul>
+  </li>
+  <li><strong>Allocating the Kernel Stack:</strong>
+    <ul>
+      <li>Every process needs its own kernel‑mode stack for handling system calls and interrupts.</li>
+      <li>We allocate another 4 KB for this and set the kernel stack pointer to the top of that region.</li>
+    </ul>
+  </li>
+  <li><strong>Linking into the Global Process Table:</strong>
+    <ul>
+      <li>The new PCB is pushed onto the front of a global singly linked list of all processes.</li>
+      <li>This makes it easy for the kernel to iterate over every process when, for example, cleaning up zombies.</li>
+    </ul>
+  </li>
+  <li><strong>Readying and Enqueuing:</strong>
+    <ul>
+      <li>With both stacks and all fields initialized, we mark the process as READY.</li>
+      <li>Insert it into the scheduler’s ready queue.</li>
+    </ul>
+  </li>
+</ul>
 </ul>
 
         </section>
