@@ -28,7 +28,7 @@
     <main>
       <article>
 
-        <!-- Section 1: Introduction -->
+        <!-- Introduction -->
         <section>
           <h2>1. Introduction</h2>
           <p>
@@ -36,231 +36,565 @@
           </p>
         </section>
 
-        <!-- Section 2: Multiboot Header -->
+        <!-- Multiboot Header -->
         <section>
           <h2>2. Multiboot Header</h2>
-          <p>
-            ApnaOS is loaded by a Multiboot-compliant bootloader (e.g., GRUB). The kernel binary must include a special header within the first 8 KB to signal compatibility and request boot information.
-          </p>
           <pre><code>__attribute__((section(".multiboot")))
-__attribute__((used))
-static const struct {
-    uint32_t magic;      // Multiboot magic number: 0x1BADB002
-    uint32_t flags;      // Flags: alignment, memory info, video info
-    uint32_t checksum;   // checksum = -(magic + flags)
-} multiboot_header = {
-    0x1BADB002,
-    0x00010003,
-    -(0x1BADB002 + 0x00010003)
-};
-</code></pre>
-          <p>
-            <strong>Why:</strong> The magic confirms to GRUB this kernel understands the Multiboot protocol. Flags request memory map and video mode info. The checksum ensures header integrity.
-          </p>
+            __attribute__((used)) static const struct {
+                uint32_t magic;
+                uint32_t flags;
+                uint32_t checksum;
+            } multiboot_header = {
+                0x1BADB002,
+                0x00010003,
+                -(0x1BADB002 + 0x00010003)
+            };
+            </code></pre>
+            <ul>
+              <li>Placed in the “.multiboot” section so the bootloader can find it before the kernel is relocated.</li>
+              <li><code>magic</code> must be <code>0x1BADB002</code> to identify a Multiboot‑compliant kernel.</li>
+              <li><code>flags</code> (<code>0x00010003</code>) requests memory and video information from the bootloader.</li>
+              <li><code>checksum</code> is computed so that <code>magic + flags + checksum</code> equals zero, validating the header’s integrity.</li>
+            </ul>
         </section>
 
-        <!-- Section 3: Kernel Entry Point -->
+        <!-- Implementation -->
         <section>
-          <h2>3. Kernel Entry Point</h2>
-          <p>
-            After the bootloader loads the kernel into memory and passes a pointer to the Multiboot info structure, execution jumps to <code>kernel_main</code>:
-          </p>
-          <pre><code>void kernel_main(uint32_t multiboot_info) {
-    serial_init();
-    debug_print("Entering kernel_main");
+          <h2>Implementation Details</h2>
 
-    memory_init(multiboot_info);
-    debug_print("Memory manager initialized");
+          <h3>1. Conversions and debugging statements</h3>
+          <h4>atoi</h4>
+          <pre><code>int atoi(const char *s) {
+            int num = 0;
+            int sign = 1;
+            if (*s == '-') {
+                sign = -1;
+                s++;
+            }
+            while (*s) {
+                if (*s >= '0' && *s <= '9') {
+                    num = num * 10 + (*s - '0');
+                } else {
+                    break;
+                }
+                s++;
+            }
+            return sign * num;
+        }
+        </code></pre>
+            <ul>
+            <li>Detects an optional leading <code>-</code> and records the sign.</li>
+            <li>Iterates over digit characters, converting each from ASCII to its numeric value and accumulating into <code>num</code>.</li>
+            <li>Stops parsing when a non‑digit is encountered.</li>
+            <li>Returns the integer multiplied by the sign.</li>
+            </ul>
+          </ul>
+          <h4>itoa</h4>
+          <pre><code>void itoa(int n, char *str) {
+            int i = 0, sign = n;
+            if(sign < 0) n = -n;
+            do {
+                str[i++] = n % 10 + '0';
+                n /= 10;
+            } while(n > 0);
+            if(sign < 0) str[i++] = '-';
+            str[i] = '\0';
+            int j = 0;
+            char temp;
+            for(j = 0; j < i / 2; j++){
+                temp = str[j];
+                str[j] = str[i - j - 1];
+                str[i - j - 1] = temp;
+            }
+        }        
+        </code></pre>
+            <ul>
+                <li>Records the original sign and makes <code>n</code> non‑negative for digit extraction.</li>
+                <li>Extracts digits in reverse order by repeatedly taking <code>n % 10</code> and dividing by 10.</li>
+                <li>Appends a minus sign if the original number was negative.</li>
+                <li>Adds a null terminator and then reverses the string in place to correct the digit order.</li>
+            </ul>
+          </ul>
+          <h4>int_to_hex</h4>
+          <pre><code>void int_to_hex(uint32_t num, char *buffer) {
+            const char hex_chars[] = "0123456789ABCDEF";
+            buffer[0] = '0'; buffer[1] = 'x';
+            for (int i = 0; i < 8; i++)
+                buffer[i + 2] = hex_chars[(num >> ((7 - i) * 4)) & 0xF];
+            buffer[10] = '\0';
+        }          
+        </code></pre>
+            <ul>
+                <li>Prefixes the string with "0x".</li>
+                <li>Extracts each nibble (4 bits) from most significant to least by shifting and masking.</li>
+                <li>Maps the nibble value to its hexadecimal character.</li>
+                <li>Produces an 8‑digit hex representation plus the "0x" prefix and null terminator.</li>
+            </ul>
+          </ul>
+          <h4>int_to_dec</h4>
+          <pre><code>void int_to_dec(uint32_t num, char *buffer) {
+            char temp[16];
+            int pos = 0;
+            if(num == 0){ buffer[0] = '0'; buffer[1] = '\0'; return; }
+            while(num > 0 && pos < 15){
+                temp[pos++] = '0' + (num % 10);
+                num /= 10;
+            }
+            int i;
+            for(i = 0; i < pos; i++)
+                buffer[i] = temp[pos - i - 1];
+            buffer[i] = '\0';
+        }            
+        </code></pre>
+            <ul>
+              <li>Handles zero as a special case immediately.</li>
+              <li>Extracts decimal digits into a temporary buffer in reverse order.</li>
+              <li>Copies them back into buffer in the correct forward order.</li>
+              <li>Ensures null termination.</li>
+            </ul>
+          </ul>
+          <h4>int_to_str</h4>
+          <pre><code>void int_to_str(int value, char *buffer) {
+            int i = 0;
+            if(value == 0){ buffer[i++] = '0'; buffer[i] = '\0'; return; }
+            char temp[10];
+            int j = 0;
+            while(value){
+                temp[j++] = '0' + (value % 10);
+                value /= 10;
+            }
+            while(j > 0){
+                buffer[i++] = temp[--j];
+            }
+            buffer[i] = '\0';
+        }               
+        </code></pre>
+            <ul>
+              <li>Similar to <code>int_to_dec</code> but for signed integers.</li>
+              <li>Extracts digits into <code>temp</code>, then moves them into <code>buffer</code> in reverse order of extraction.</li>
+              <li>Handles zero explicitly.</li>
+              <li>Null‑terminates the result.</li>
 
-    create_file_system();
-    debug_print("File system initialized");
+            </ul>
+          </ul>
 
-    gdt_install();
-    debug_print("GDT installed");
+          <h4>debug_print</h4>
+          <pre><code> void debug_print(const char *msg) {
+            serial_print(msg);
+            serial_print("\r\n");
+        }
+        
+        </code></pre>
+            <ul>
+              <li>Sends the supplied string to the serial port.</li>
+              <li>Appends a carriage return and newline for readability in the serial console.</li>
+            </ul>
+          </ul>
 
-    pic_remap();
-    idt_install();
-    irq_install();
-    debug_print("Interrupt controllers configured");
+          <h4>debug_int</h4>
+          <pre><code> void debug_int(uint32_t val) {
+            char buffer[16];
+            int_to_hex(val, buffer);
+            debug_print(buffer);
+        }
+        </code></pre>
+            <ul>
+              <li>Converts the 32‑bit integer to an 8‑digit hexadecimal string.</li>
+              <li>Prints that string (with line break) via the serial console.</li>
+            </ul>
+          </ul>
 
-    init_keyboard();
-    debug_print("Keyboard driver initialized");
+        <h3>2. Helper Functions</h3>
+        <h4>scroll_screen</h4>
+          <pre><code>void scroll_screen(void)
+            {
+                volatile char *video = VGA_MEMORY;
+                for (int row = 1; row < VGA_HEIGHT; row++){
+                    for (int col = 0; col < VGA_WIDTH; col++){
+                        int from = (row * VGA_WIDTH + col) * 2;
+                        int to = ((row - 1) * VGA_WIDTH + col) * 2;
+                        video[to] = video[from];
+                        video[to+1] = video[from+1];
+                    }
+                }
+                int last_row = (VGA_HEIGHT - 1) * VGA_WIDTH * 2;
+                for (int col = 0; col < VGA_WIDTH; col++){
+                    video[last_row + col*2] = ' ';
+                    video[last_row + col*2 + 1] = 0x07;
+                }
+                vga_row = VGA_HEIGHT - 1;
+                vga_col = 0;
+            }                          
+          </code></pre>
+            <ul>
+                <li>Copies each character cell (two bytes: ASCII and attribute) from the second row onward up one row.</li>
+                <li>Calculates source and destination indices in the VGA buffer for each position.</li>
+                <li>Clears the bottom row by writing spaces with attribute 0x07.</li>
+                <li>Resets the cursor to the first column of the last row.</li>
+            </ul>
+        <h4>putchar</h4>
+          <pre><code>void putchar(char c)
+            {
+                volatile char *video = VGA_MEMORY;
+                if(c == '\n'){
+                    vga_row++;
+                    vga_col = 0;
+                } else {
+                    int offset = (vga_row * VGA_WIDTH + vga_col) * 2;
+                    video[offset] = c;
+                    video[offset+1] = 0x07;
+                    vga_col++;
+                    if(vga_col >= VGA_WIDTH){ vga_row++; vga_col = 0; }
+                }
+                if(vga_row >= VGA_HEIGHT) scroll_screen();
+            }                               
+          </code></pre>
+            <ul>
+              <li>Handles newline by advancing the row and resetting the column.</li>
+              <li>For other characters, computes the byte offset in VGA memory and writes the character and attribute byte.</li>
+              <li>Increments the column, wrapping to the next row when reaching the screen width.</li>
+              <li>Invokes scrolling when the cursor moves past the bottom of the screen.</li>
+            </ul>
+        <h4>print_to_screen</h4>
+          <pre><code>void print_to_screen(const char *message)
+            {
+                while(*message){ putchar(*message); message++; }
+            }                 
+          </code></pre>
+            <ul>
+              <li>Iterates through a null‑terminated string and calls putchar for each character to render the entire message on screen.</li>
+            </ul>
+        <h4>Process Command</h4>
+          <pre><code>ProcessCommand process_commands[] = {
+            {"dummy1", dummy_process_1},
+            {"dummy2", dummy_process_2},
+            {"dummy3", dummy_process_3}
+        };         
+        const int num_process_commands = sizeof(process_commands)/sizeof(ProcessCommand);
+          </code></pre>
+            <ul>
+              <li>Defines a list of command names paired with their handler functions via a struct containing a <code>const char *name</code> and a <code>void (*func)(void)</code> pointer.</li>
+              <li>Instantiates three entries—<code>"dummy1"</code>, <code>"dummy2"</code>, and <code>"dummy3"</code>—each pointing to its corresponding <code>dummy_process_*</code> function.</li>
+              <li>Computes <code>num_process_commands</code> at compile time by dividing the total array size by the size of one <code>ProcessCommand</code> entry.</li>
+            </ul>
+        <h4>read_line</h4>
+          <pre><code>extern volatile int input_ready;
+            extern volatile char input_line[BUFFER_SIZE];
+            void read_line(char *buffer, int max_length)
+            {
+                while(!input_ready){ asm volatile("hlt"); }
+                int i = 0;
+                while(input_line[i] != '\0' && i < max_length-1){ buffer[i] = input_line[i]; i++; }
+                buffer[i] = '\0';
+                input_ready = 0;
+            }            
+          </code></pre>
+            <ul>
+              <ul>
+                <li>Relies on two volatile externs—<code>input_ready</code> and <code>input_line[]</code>—to communicate with an interrupt or ISR that fills the input buffer.</li>
+                <li>Spins in a low‑power wait (<code>hlt</code>) until <code>input_ready</code> becomes nonzero.</li>
+                <li>Copies characters from <code>input_line</code> into the provided buffer, stopping when it reaches either the terminating <code>'\0'</code> or the maximum allowed length minus one.</li>
+                <li>Appends a <code>'\0'</code> to properly terminate the string and resets <code>input_ready</code> to zero so the next input can be signaled.</li>
+              </ul>
+            </ul>
 
-    // Enable interrupts globally
-    asm volatile("sti");
+            <h3>3. CLI loop</h3>
+          <pre><code>void cli_loop(void) {
+            char input[MAX_INPUT_LENGTH];
+        
+            while (1) {
+                print_to_screen("CLI> ");
+                read_line(input, MAX_INPUT_LENGTH);
+                char *token1 = strtok(input, " \t");
+                if (!token1) {
+                    continue;
+                }
+                if (strcmp(token1, "exit") == 0) {
+                    print_to_screen("Exiting kernel CLI...\n");
+                    break;
+                }
+                else if (strcmp(token1, "process") == 0) {
+                    char *token2 = strtok(NULL, " \t");
+                    if (!token2) {
+                        print_to_screen("Usage: process <dummy1|dummy2|dummy3|syscall test|process test|start> [priority]\n");
+                        continue;
+                    }
+                    if (strcmp(token2, "start") == 0) {
+                        print_to_screen("Starting scheduled processes...\n");
+                        schedule();
+                        continue;
+                    }
+                    
+                    int priority = 1;
+                    char *token3 = strtok(NULL, " \t"); 
+                    char *token4 = strtok(NULL, " \t");
+        
+                    if (strcmp(token2, "syscall") == 0 && token3 && strcmp(token3, "test") == 0) {
+                        if (token4) priority = atoi(token4);
+                        print_to_screen("Queueing syscall_test process...\n");
+                        
+                        create_process(
+                            get_new_pid(),
+                            (uint32_t *) syscall_test,
+                            priority, 1, 2
+                        );
+                        continue;
+                    }
+        
+                    if (strcmp(token2, "process") == 0 && token3 && strcmp(token3, "test") == 0) {
+                        if (token4) priority = atoi(token4);
+                        print_to_screen("Queueing process_test process...\n");
+                
+                        create_process(
+                            get_new_pid(),
+                            (uint32_t *) process_test,
+                            priority, 1, 2
+                        );
+                        continue;
+                    }
+        
+                    if (token3) {
+                        priority = atoi(token3);
+                    }
+                    
+                    int found = 0;
+                    for (int i = 0; i < num_process_commands; i++) {
+                        if (strcmp(token2, process_commands[i].name) == 0) {
+                            print_to_screen("Queueing process...\n");
+                            
+                            create_process(
+                                get_new_pid(),
+                                (uint32_t *) process_commands[i].func,
+                                priority,
+                                1, 2
+                            );
+                            found = 1;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        print_to_screen("Error: Unknown process name.\n");
+                    }
+                }
+                else if (strcmp(token1, "file") == 0) {
+                    char *operation = strtok(NULL, " \t");
+                    if (!operation) {
+                    print_to_screen("Usage: file <operation> <filename> [args]\n");
+                    continue;
+                    }
+        
+                    if (strcmp(operation, "make") == 0) {
+                    char *filename = strtok(NULL, " \t");
+                    if (!filename) {
+                        print_to_screen("Usage: file make <filename>\n");
+                        continue;
+                    }
+                    if (create_file(filename) == -1) {
+                        print_to_screen("Error: Failed to create file.\n");
+                    } else {
+                        print_to_screen("File created successfully.\n");
+                    }
+                    }
+                    else if (strcmp(operation, "read") == 0) {
+                    char *filename = strtok(NULL, " \t");
+                    if (!filename) {
+                        print_to_screen("Usage: file read <filename>\n");
+                        continue;
+                    }
+                    char buffer[128];
+                    int bytes_read = read_file(filename, buffer, sizeof(buffer));
+                    if (bytes_read == -1) {
+                        print_to_screen("Error: Failed to read file.\n");
+                    } else {
+                        buffer[bytes_read] = '\0'; // Null-terminate the string
+                        print_to_screen("File content: ");
+                        print_to_screen(buffer);
+                        print_to_screen("\n");
+                    }
+                    }
+                    else if (strcmp(operation, "write") == 0) {
+                    char *filename = strtok(NULL, " \t");
+                    char *data = strtok(NULL, "\n"); // Remaining input as data
+                    if (!filename || !data) {
+                        print_to_screen("Usage: file write <filename> <data>\n");
+                        continue;
+                    }
+                    if (write_file(filename, data, strlen(data)) == -1) {
+                        print_to_screen("Error: Failed to write to file.\n");
+                    } else {
+                        print_to_screen("Data written to file successfully.\n");
+                    }
+                    }
+                    else if (strcmp(operation, "append") == 0) {
+                    char *filename = strtok(NULL, " \t");
+                    char *data = strtok(NULL, "\n"); // Remaining input as data
+                    if (!filename || !data) {
+                        print_to_screen("Usage: file append <filename> <data>\n");
+                        continue;
+                    }
+                    if (append_to_file(filename, data, strlen(data)) == -1) {
+                        print_to_screen("Error: Failed to append to file.\n");
+                    } else {
+                        print_to_screen("Data appended to file successfully.\n");
+                    }
+                    }
+                    else if (strcmp(operation, "rm") == 0) {
+                    char *filename = strtok(NULL, " \t");
+                    if (!filename) {
+                        print_to_screen("Usage: file rm <filename>\n");
+                        continue;
+                    }
+                    if (delete_file(filename) == -1) {
+                        print_to_screen("Error: Failed to delete file.\n");
+                    } else {
+                        print_to_screen("File deleted successfully.\n");
+                    }
+                    }
+                    else if (strcmp(operation, "ls") == 0) {
+                    list_files();
+                    }
+                    else {
+                    print_to_screen("Unknown file operation. Use 'make', 'read', 'write', 'append', 'rm', or 'ls'.\n");
+                    }
+                }
+                else if (strcmp(token1, "ls") == 0) {
+                    list_files();
+                }
+                else {
+                    print_to_screen("Unknown command. Use 'process', 'file', 'ls', or 'exit'.\n");
+                }
+            }
+        }
+          </code></pre>
+            <ul>
+              <ul>
+                <li>Enters an infinite loop presenting a simple command‑line interface.</li>
+                <li>Displays the prompt "CLI> " and waits for user input via <code>read_line</code>.</li>
+                <li>Tokenization:
+                  <ul>
+                    <li>Splits the input line on spaces or tabs into <code>token1</code>, the primary command.</li>
+                    <li>If <code>token1</code> is empty, restarts the loop.</li>
+                  </ul>
+                </li>
+                <li><code>exit</code> Command:
+                  <ul>
+                    <li>If <code>token1</code> is "exit", breaks out of the loop, ending the CLI.</li>
+                  </ul>
+                </li>
+                <li><code>process</code> Command:
+                  <ul>
+                    <li>Reads <code>token2</code> to decide the subcommand or process name.</li>
+                    <li>If missing, shows usage for process commands.</li>
+                    <li>If <code>token2</code> is "start":
+                      <ul>
+                        <li>Prints a message and calls the scheduler to begin running queued processes.</li>
+                      </ul>
+                    </li>
+                    <li>Handles special tests:
+                      <ul>
+                        <li>"syscall test" and "process test" each accept an optional priority (<code>token4</code>) and enqueue a corresponding test process with default or specified priority.</li>
+                      </ul>
+                    </li>
+                    <li>Otherwise treats <code>token2</code> as the name of one of the dummy processes:
+                      <ul>
+                        <li>Converts an optional <code>token3</code> into a numeric priority.</li>
+                        <li>Searches the <code>process_commands[]</code> array for a matching name.</li>
+                        <li>On match, enqueues that process with the chosen priority.</li>
+                        <li>If no match, reports “Unknown process name.”</li>
+                      </ul>
+                    </li>
+                  </ul>
+                </li>
+                <li><code>file</code> Command:
+                  <ul>
+                    <li>Reads operation (e.g., make, read, write, append, rm, ls).</li>
+                    <li>For each operation:
+                      <ul>
+                        <li><code>make</code>: expects a filename, creates a file, reports success or failure.</li>
+                        <li><code>read</code>: reads up to 128 bytes into a buffer, null‑terminates it, and prints its contents.</li>
+                        <li><code>write</code>/<code>append</code>: reads a filename and the rest of the input as data, writes or appends it to the file, and reports the result.</li>
+                        <li><code>rm</code>: deletes the named file.</li>
+                        <li><code>ls</code>: lists all files.</li>
+                      </ul>
+                    </li>
+                    <li>If an unrecognized operation is given, prints an error with valid options.</li>
+                  </ul>
+                </li>
+                <li><code>ls</code> Command (Standalone):
+                  <ul>
+                    <li>When <code>token1</code> is "ls" by itself, simply calls <code>list_files()</code>.</li>
+                  </ul>
+                </li>
+                <li>Fallback:
+                  <ul>
+                    <li>Any other <code>token1</code> triggers a generic “Unknown command” message, reminding the user of the valid top‑level commands: <code>process</code>, <code>file</code>, <code>ls</code>, or <code>exit</code>.</li>
+                  </ul>
+                </li>
+              </ul>
+            </ul>
 
-    init_syscalls();
-    debug_print("System calls interface ready");
+          <h3>4. Kernel Main</h3>
+          <pre><code>void kernel_main(uint32_t multiboot_info)
+            {
+                serial_init();
+                debug_print("DEBUG: Entering kernel_main.");
+                for (int i = 1; i <= 30; i++){
+                    print_to_screen("Debug: line ");
+                    char num[10];
+                    int_to_str(i, num);
+                    print_to_screen(num);
+                    print_to_screen("\n");
+                }
+                memory_init(multiboot_info);
+                debug_print("DEBUG: Memory initialized.");
+            
+                create_file_system();
+                debug_print("DEBUG: Filesystem initialized.");
+                
+                gdt_install();
+                print_to_screen("DEBUG: GDT installed.\n");
+                pic_remap();
+                idt_install();
+                irq_install();
+                print_to_screen("DEBUG: IDT and IRQ handlers installed.\n");
+                init_keyboard();
+                
+                print_to_screen("DEBUG: Keyboard initialized. Press keys!\n");
+                asm volatile("sti");
+                init_syscalls();
+                debug_print("DEBUG: System calls initialized.");
+            
+                init_process_management();
+                debug_print("DEBUG: Process management initialized.");
+                cli_loop();
+                
+                asm volatile("cli");
+                print_to_screen("Kernel execution terminated.\n");
+                while(1){ asm volatile("hlt"); }
+            }            
+          </code></pre>
+            <ul>
+              <ul>
+                <li>Initializes serial communication.</li>
+                <li>Prints a debug message indicating entry into kernel_main.</li>
+                <li>Outputs thirty lines of on‑screen debug text, numbering each line from 1 to 30.</li>
+                <li>Calls memory_init with the Multiboot information to set up the kernel heap, then logs that memory is initialized.</li>
+                <li>Invokes create_file_system to initialize the filesystem, then logs that the filesystem is ready.</li>
+                <li>Installs the Global Descriptor Table and prints a confirmation.</li>
+                <li>Remaps the PIC, installs the Interrupt Descriptor Table, and sets up IRQ handlers, then prints confirmation of IDT/IRQ setup.</li>
+                <li>Initializes keyboard input and notifies the user that key presses will be handled.</li>
+                <li>Executes the sti instruction to enable CPU interrupts.</li>
+                <li>Calls init_syscalls to set up system call handling, then logs that syscalls are initialized.</li>
+                <li>Calls init_process_management to prepare process queues and related structures, then logs that process management is initialized.</li>
+                <li>Enters the command‑line interface loop (cli_loop), handing control to user commands.</li>
+                <li>Upon exiting the CLI, executes the cli instruction to disable interrupts, prints a termination message, and enters an infinite hlt loop to halt the CPU.</li>
+              </ul>
+            </ul>
 
-    init_process_management();
-    debug_print("Process scheduler ready");
-
-    // Enter command-line or scheduler loop
-    cli_loop();
-
-    // If CLI exits, halt the CPU
-    asm volatile("cli; hlt");
-}
-</code></pre>
-          <p>
-            <strong>Why:</strong> Each subsystem prints debugging info over serial and/or VGA to ease development. Finally, interrupts are enabled and the system enters an interactive shell.
-          </p>
-        </section>
-
-        <!-- Section 4: Debugging & I/O -->
+            </section>
+        <!-- Conclusion -->
         <section>
-          <h2>4. Debugging & I/O Facilities</h2>
-          <p>
-            Early in boot, we configure serial and VGA text output to observe kernel behavior.
-          </p>
-          <h3>4.1 Serial Port</h3>
-          <pre><code>void serial_init() { /* configure COM1 for 115200 baud */ }
-void debug_print(const char *msg) {
-    serial_print(msg); serial_print("\r\n");
-}
-</code></pre>
-          <p>
-            Serial logging is critical when VGA might not yet be configured or when running under QEMU’s serial console.
-          </p>
-          <h3>4.2 VGA Text Mode</h3>
-          <pre><code>#define VGA_MEMORY ((volatile char*)0xB8000)
-void putchar(char c) { /* write character/attribute to VGA_MEMORY */ }
-void print_to_screen(const char *msg) { while(*msg) putchar(*msg++); }
-</code></pre>
-          <p>
-            VGA text mode allows on-screen output and scrolling without relying on serial.
-          </p>
-        </section>
-
-        <!-- Section 5: Memory Manager -->
-        <section>
-          <h2>5. Memory Management</h2>
-          <p>
-            We implement a simple bump allocator for kernel allocations. A 16 MB region is reserved; <code>kmalloc</code> bumps an offset to satisfy requests.
-          </p>
-          <pre><code>#define KERNEL_MEMORY_SIZE (16 * 1024 * 1024)
-static uint8_t kernel_memory[KERNEL_MEMORY_SIZE];
-static uint32_t kernel_memory_offset;
-
-void memory_init(uint32_t multiboot_info) {
-    // Zero and reset
-    memset(kernel_memory, 0, KERNEL_MEMORY_SIZE);
-    kernel_memory_offset = 0;
-}
-
-void* kmalloc(size_t size) {
-    // Allocate header + payload, align to 4 bytes
-    /* ... */
-}
-
-void kfree(void* ptr) {
-    // Mark header as free (no coalescing yet)
-}
-</code></pre>
-          <p>
-            <strong>Why:</strong> This provides dynamic memory to subsystems (keyboard buffers, process stacks) before introducing advanced allocators.
-          </p>
-        </section>
-
-        <!-- Section 6: File System -->
-        <section>
-          <h2>6. File System Initialization</h2>
-          <pre><code>void format_disk() {
-    sb.magic = 0x12345678;
-    sb.total_blocks = BLOCK_COUNT;
-    sb.free_blocks  = BLOCK_COUNT;
-    sb.block_size   = BLOCK_SIZE;
-    // Clear inodes, directory, and block_bitmap
-}
-
-void create_file_system() {
-    format_disk();
-}
-</code></pre>
-          <p>
-            A minimal in-memory VFS enables file commands in the CLI early in development.
-          </p>
-        </section>
-
-        <!-- Section 7: GDT & Protected Mode -->
-        <section>
-          <h2>7. GDT & Protected Mode Segmentation</h2>
-          <pre><code>void gdt_install() {
-    // Define null, code, and data segments; load GDTR
-}
-</code></pre>
-          <p>
-            Although we use a flat memory model, installing a GDT is required to switch into 32-bit protected mode and enforce ring-zero privileges.
-          </p>
-        </section>
-
-        <!-- Section 8: Interrupts & PIC -->
-        <section>
-          <h2>8. Interrupt Handling</h2>
-
-          <h3>8.1 PIC Remapping</h3>
-          <pre><code>void pic_remap() {
-    // Remap IRQs 0–15 to IDT entries 32–47
-}
-</code></pre>
-
-          <h3>8.2 IDT Installation</h3>
-          <pre><code>void idt_install() {
-    // Set IDT entries for ISRs and IRQs; load IDTR
-}
-
-typedef void (*isr_t)(void);
-isr_t interrupt_handlers[256];
-
-void irq_install() {
-    // Enable individual IRQ handlers for timer, keyboard, etc.
-}
-</code></pre>
-          <p>
-            Proper interrupt setup is crucial for timers (scheduling), keyboard input, and hardware drivers.
-          </p>
-        </section>
-
-        <!-- Section 9: Keyboard & CLI -->
-        <section>
-          <h2>9. Keyboard Driver & Command Line</h2>
-          <pre><code>void init_keyboard() {
-    // Install IRQ1 handler; initialize scan code translation
-}
-
-void cli_loop(void) {
-    char input[MAX_INPUT_LENGTH];
-    while (1) {
-        print_to_screen("CLI> ");
-        read_line(input, MAX_INPUT_LENGTH);
-        handle_command(input);
-    }
-}
-</code></pre>
-          <p>
-            The CLI provides commands for process creation (<code>process</code>), file operations (<code>mkfile</code>, <code>readfile</code>), and system introspection.
-          </p>
-        </section>
-
-        <!-- Section 10: System Calls & Processes -->
-        <section>
-          <h2>10. Syscalls & Process Scheduler</h2>
-          <p>
-            We initialize the system call interface and a simple priority-based scheduler before handing control to user tasks.
-          </p>
-          <pre><code>void init_syscalls(void) {
-    // Register trap gate for syscall interrupt
-}
-
-void init_process_management() {
-    // Initialize ready_queue, process_table, next_pid
-}
-</code></pre>
-        </section>
-
-        <!-- Section 11: Conclusion -->
-        <section>
-          <h2>11. Conclusion & Next Steps</h2>
+          <h2>Conclusion & Next Steps</h2>
           <p>
             This deep dive has covered how ApnaOS transitions from bootloader to a running kernel: parsing Multiboot info, setting up memory and I/O, configuring CPU structures, and enabling multitasking and filesystem access through the CLI. Future work includes:
           </p>
