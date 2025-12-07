@@ -478,21 +478,9 @@
           <p><strong>Usage:</strong> <code>process simplesys</code> or <code>process multisys</code>, then <code>process start</code></p>
         </section>
 
-        <!-- Future Directions -->
-        <section>
-          <h2>4. Future Directions</h2>
-          <ul>
-            <li><strong>Argument validation:</strong> Securely copy arguments from user space and validate pointers.</li>
-            <li><strong>Syscall table:</strong> Implement a dynamic dispatch table indexed by syscall numbers.</li>
-            <li><strong>64-bit registers:</strong> Extend to handle 64-bit arguments and return values.</li>
-            <li><strong>Error reporting:</strong> Integrate standard errno codes for rich diagnostics.</li>
-            <li><strong>Performance:</strong> Use SYSENTER/SYSCALL for faster transitions on x86 architectures.</li>
-          </ul>
-        </section>
-
         <!-- Conclusion -->
         <section>
-          <h2>5. Conclusion</h2>
+          <h2>Conclusion</h2>
           <p>
             ApnaOS's system call interface provides a complete implementation of process management primitives including fork, wait, yield, and exit. These syscalls enable process creation, hierarchical process trees, inter-process communication, and proper resource cleanup. The accompanying test programs demonstrate real-world usage while validating correctness, making this a robust foundation for building higher-level OS features.
           </p>
@@ -507,3 +495,4 @@
   </div>
 </body>
 </html>
+
