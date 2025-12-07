@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Implementing Process Management | ApnaOS Blog</title>
+  <link rel="stylesheet" href="../css/style.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+</head>
+<body>
+  <a href="../index.html" class="home-link">
+    <i class="fas fa-house"></i> Home
+  </a>
+
+  <div class="container">
+    <header class="site-header">
+      <h1>Implementing Process Management & Fork</h1>
+      <p class="post-meta">Posted on July 22, 2025</p>
+    </header>
+
+    <main>
+      <article class="blog-post">
+        <h2>The Multitasking Dream</h2>
+        <p>
+          A single-tasking OS is boring. We wanted multiple processes running simultaneously—or at least appearing to! 
+          This meant implementing process control blocks (PCBs), a scheduler, and the infamous <code>fork()</code> system call.
+        </p>
+
+        <h2>Designing the PCB</h2>
+        <p>
+          Each process needs metadata: where is its code? What's its stack pointer? Is it running or waiting? 
+          We created a Process Control Block to store all this:
+        </p>
+
+        <pre><code>typedef struct PCB {
+    uint32_t pid;              // Unique process ID
+    uint32_t state;            // READY, RUNNING, BLOCKED, ZOMBIE
+    uint32_t* user_stack_ptr;  // Saved stack pointer
+    uint32_t cr3;              // Page directory address
+    int priority;              // Scheduling priority
+    struct PCB* parent;        // Parent process
+    int exit_status;           // Return value when exiting
+    struct PCB* next;          // Linked list pointer
+} PCB;</code></pre>
+
+        <h2>The Scheduler: Round Robin</h2>
+        <p>
+          We implemented a simple round-robin scheduler: each process gets a fixed time slice, then we switch to the next. 
+          The ready queue holds all runnable processes:
+        </p>
+
+        <pre><code>void schedule() {
+    if (is_queue_empty(&ready_queue)) {
+        return;  // Nothing to schedule
+    }
+    
+    // Save current process state
+    if (current_process && current_process->state == STATE_RUNNING) {
+        current_process->state = STATE_READY;
+        enqueue_process(&ready_queue, current_process);
+    }
+    
+    // Get next process
+    current_process = dequeue_process(&ready_queue);
+    current_process->state = STATE_RUNNING;
+    
+    // Switch to its address space
+    switch_page_directory(current_process->cr3);
+    
+    // Context switch (assembly)
+    switch_context(current_process->user_stack_ptr);
+}</code></pre>
+
+        <h2>Implementing Fork: The Mind-Bender</h2>
+        <p>
+          <code>fork()</code> is one of the most elegant—and confusing—system calls. It creates a copy of the calling process. 
+          The parent gets the child's PID as return value, the child gets 0. Same code, different return values!
+        </p>
+
+        <pre><code>int sys_fork() {
+    // 1. Allocate new PCB
+    PCB* child = kmalloc(sizeof(PCB));
+    child->pid = get_new_pid();
+    child->state = STATE_READY;
+    child->parent = current_process;
+    
+    // 2. Copy address space (page tables)
+    child->cr3 = copy_page_directory(current_process->cr3);
+    
+    // 3. Copy stack
+    child->user_stack_ptr = kmalloc(STACK_SIZE);
+    memcpy(child->user_stack_ptr, 
+           current_process->user_stack_ptr, 
+           STACK_SIZE);
+    
+    // 4. Modify child's stack to return 0
+    // (This is the magic that makes fork work!)
+    uint32_t* child_eax = &child->user_stack_ptr[EAX_OFFSET];
+    *child_eax = 0;  // Child sees return value 0
+    
+    // 5. Add to ready queue
+    enqueue_process(&ready_queue, child);
+    
+    // 6. Parent returns child's PID
+    return child->pid;
+}</code></pre>
+
+        <h2>The Stack Manipulation Trick</h2>
+        <p>
+          The hardest part was understanding how both processes "return" from <code>fork()</code> with different values. 
+          The secret: we modify the child's saved EAX register (which holds return values) to 0 before it runs!
+        </p>
+
+        <div class="info-message">
+          <i class="fas fa-lightbulb"></i>
+          <strong>Aha moment:</strong> When the child process first runs, it "returns" from fork() even though it never 
+          actually called it! It starts execution right after the fork() call in the parent's code, but with a different 
+          stack and return value.
+        </div>
+
+        <h2>Testing Fork: The Parent-Child Test</h2>
+        <p>Our first test program:</p>
+
+        <pre><code>void test_fork() {
+    print("Parent: About to fork...\n");
+    
+    int pid = fork();
+    
+    if (pid == 0) {
+        // Child process
+        print("Child: I am alive! My parent is PID ");
+        print_int(getppid());
+        print("\n");
+        exit(42);
+    } else {
+        // Parent process
+        print("Parent: Created child with PID ");
+        print_int(pid);
+        print("\n");
+        
+        int status;
+        wait(&status);  // Wait for child to exit
+        
+        print("Parent: Child exited with status ");
+        print_int(status);
+        print("\n");
+    }
+}</code></pre>
+
+        <h3>Output:</h3>
+        <pre><code>Parent: About to fork...
+Parent: Created child with PID 2
+Child: I am alive! My parent is PID 1
+Parent: Child exited with status 42</code></pre>
+
+        <h2>Implementing Wait and Exit</h2>
+        <p>
+          Processes need to clean up properly. <code>exit()</code> marks a process as a zombie, and <code>wait()</code> 
+          lets the parent collect the exit status:
+        </p>
+
+        <pre><code>void sys_exit(int status) {
+    current_process->state = STATE_ZOMBIE;
+    current_process->exit_status = status;
+    
+    // Wake up parent if it's waiting
+    if (current_process->parent && 
+        current_process->parent->state == STATE_BLOCKED) {
+        current_process->parent->state = STATE_READY;
+        enqueue_process(&ready_queue, current_process->parent);
+    }
+    
+    // Switch to another process (we're done)
+    schedule();
+}
+
+int sys_wait(int* status) {
+    // Look for zombie children
+    PCB* child = find_zombie_child(current_process);
+    
+    if (child) {
+        *status = child->exit_status;
+        int pid = child->pid;
+        free_process(child);  // Clean up zombie
+        return pid;
+    }
+    
+    // No zombie yet, block until one exits
+    current_process->state = STATE_BLOCKED;
+    schedule();
+    
+    // We'll be woken up when a child exits
+    return sys_wait(status);  // Try again
+}</code></pre>
+
+        <h2>Creating Test Programs</h2>
+        <p>
+          We created two test programs to demonstrate system calls:
+        </p>
+
+        <h3>simplesys.c - Basic Fork Test</h3>
+        <pre><code>void simplesys() {
+    print("Parent process starting...\n");
+    
+    int pid = fork();
+    
+    if (pid == 0) {
+        print("Child: Hello from child!\n");
+        exit(0);
+    } else {
+        print("Parent: Waiting for child...\n");
+        wait(NULL);
+        print("Parent: Child finished!\n");
+    }
+}</code></pre>
+
+        <h3>multisys.c - Multiple Children</h3>
+        <pre><code>void multisys() {
+    print("Creating 3 child processes...\n");
+    
+    for (int i = 0; i < 3; i++) {
+        int pid = fork();
+        
+        if (pid == 0) {
+            print("Child ");
+            print_int(i);
+            print(": Starting work...\n");
+            
+            yield();  // Let other processes run
+            
+            print("Child ");
+            print_int(i);
+            print(": Finishing!\n");
+            exit(i);
+        }
+    }
+    
+    // Parent waits for all children
+    for (int i = 0; i < 3; i++) {
+        int status;
+        int pid = wait(&status);
+        print("Child PID ");
+        print_int(pid);
+        print(" exited with status ");
+        print_int(status);
+        print("\n");
+    }
+}</code></pre>
+
+        <h2>Challenges We Faced</h2>
+        <ul>
+          <li><strong>Stack corruption:</strong> Forgot to allocate separate stacks for children—they overwrote parent's stack!</li>
+          <li><strong>Zombie processes:</strong> Without proper cleanup, dead processes accumulated in memory</li>
+          <li><strong>Race conditions:</strong> Parent and child accessing shared memory caused weird bugs</li>
+          <li><strong>Context switching:</strong> Saving/restoring all registers correctly took many attempts</li>
+        </ul>
+
+        <h2>Future Improvements</h2>
+        <p>Our current implementation works but could be better:</p>
+        <ul>
+          <li><strong>Copy-on-write:</strong> Don't copy page tables until a write occurs (huge performance win)</li>
+          <li><strong>Better scheduling:</strong> Priority-based, CFS, or real-time scheduling</li>
+          <li><strong>exec():</strong> Replace process image with a new program</li>
+          <li><strong>Process groups:</strong> Support for job control and signals</li>
+        </ul>
+
+        <p class="post-navigation">
+          <a href="keyboard-driver.html">← Previous: Keyboard Driver</a>
+          <a href="filesystem-journey.html">Next: Building a Filesystem →</a>
+        </p>
+      </article>
+    </main>
+
+    <footer>© 2025 ApnaOS Team</footer>
+  </div>
+</body>
+</html>

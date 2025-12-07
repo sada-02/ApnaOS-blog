@@ -68,39 +68,67 @@
 
           <h3>2. Process Control Block (PCB)</h3>
           <p>
-            The core structure of PCB is defined roughly as:
+            The core structure of PCB is defined as:
           </p>
           <pre><code>typedef struct PCB {
-    uint32_t pid;           
-    enum State state;       
-    int priority;          
-    uint32_t* user_stack_ptr;  
-    uint32_t* user_stack_base; 
-    uint32_t* kernel_stack_ptr;
+    uint32_t pid;
+    uint32_t state;
+    uint32_t* user_stack_ptr;
+    uint32_t cr3;
+    int priority;
+    int deadline;
+    int time_to_run;
+    struct PCB* next;
+    struct PCB* next_in_table;
+    struct PCB* parent;
+    int exit_status;
+    bool is_new_child;
+    uint64_t weight;
+    uint64_t vruntime;
+    struct rb_node vr_node;
+    uint32_t* user_stack_base;
     uint32_t* kernel_stack_base;
-    bool is_new_child;   
-    struct PCB* next;          
-    struct PCB* next_in_table; 
+    uint32_t* kernel_stack_ptr;
 } PCB;
 </code></pre>
-<ul>
-  <li>→ <strong>pid</strong>: A unique identifier for each process.</li>
-  <li>→ <strong>state</strong>: The current state of the process (e.g., NEW, READY, RUNNING).</li>
-  <li>→ <strong>user_stack_ptr</strong>: Points to the current top of the process user-mode stack. On a context switch out of user mode, you save the stack pointer here so you can resume later.</li>
-  <li>→ <strong>program_counter</strong>: Holds the saved instruction pointer (EIP for 32-bit x86).</li>
-  <li>→ <strong>cr3</strong>: A special CPU control register on x86 architecture used by the CPU to locate the page table (base address of the page directory) of the process.</li>
-  <li>→ <strong>priority</strong>: A numeric priority value.</li>
-  <li>→ <strong>deadline</strong>: A deadline for the process to complete its task.</li>
-  <li>→ <strong>time_to_run</strong>: The remaining time the process has to run.</li>
-  <li>→ <strong>PCB* next</strong>: A pointer to the next PCB in the ready queue creating a chain.</li>
-  <li>→ <strong>PCB* next_in_table</strong>: Pointer used to link all PCBs in the global process table.</li>
-  <li>→ <strong>PCB* parent</strong>: Points to the PCB of the parent process.</li>
-  <li>→ <strong>exit_status</strong>: The exit status of the process.</li>
-  <li>→ <strong>is_new_child:</strong> A flag that can help the scheduler or process manager know that this PCB was just created by fork().</li>
-  <li>→ <strong>user_stack_base:</strong> Base address (lowest address) of the user-mode stack.</li>
-  <li>→ <strong>kernel_stack_base:</strong> Base address of the kernel-mode stack to handle system calls and interrupts.</li>
-  <li>→ <strong>kernel_stack_ptr:</strong> Points to the current top of the process kernel-mode stack.</li>
-</ul>
+          <p><strong>Core Identity & State:</strong></p>
+          <ul>
+            <li><strong>pid</strong>: Unique process identifier assigned sequentially starting from 1</li>
+            <li><strong>state</strong>: Current process state (STATE_NEW, STATE_READY, STATE_RUNNING, STATE_BLOCKED, STATE_EXIT, STATE_ZOMBIE)</li>
+          </ul>
+
+          <p><strong>Memory Management:</strong></p>
+          <ul>
+            <li><strong>user_stack_ptr</strong>: Current top of user-mode stack, saved/restored during context switches</li>
+            <li><strong>user_stack_base</strong>: Base address (lowest address) of the user-mode stack</li>
+            <li><strong>kernel_stack_ptr</strong>: Current top of kernel-mode stack for privileged operations</li>
+            <li><strong>kernel_stack_base</strong>: Base address of kernel-mode stack (4KB size)</li>
+            <li><strong>cr3</strong>: Page directory base register for virtual memory translation (points to process's page table)</li>
+          </ul>
+
+          <p><strong>Scheduling & Priority:</strong></p>
+          <ul>
+            <li><strong>priority</strong>: Numeric priority value (lower number = higher priority, used in priority queue scheduling)</li>
+            <li><strong>deadline</strong>: Target completion time for real-time scheduling (used in EDF scheduler variant)</li>
+            <li><strong>time_to_run</strong>: Time slice allocated to process (used in SJF scheduler variant)</li>
+            <li><strong>weight</strong>: Scheduler weight derived from priority (default 1024 for CFS scheduling)</li>
+            <li><strong>vruntime</strong>: Cumulative virtual runtime for CFS (Completely Fair Scheduler) implementation</li>
+            <li><strong>vr_node</strong>: Red-black tree node for efficient CFS queue management</li>
+          </ul>
+
+          <p><strong>Process Hierarchy & Lifecycle:</strong></p>
+          <ul>
+            <li><strong>next</strong>: Pointer to next PCB in ready queue (forms linked list)</li>
+            <li><strong>next_in_table</strong>: Pointer to next PCB in global process table</li>
+            <li><strong>parent</strong>: Pointer to parent process's PCB (used for wait/exit synchronization)</li>
+            <li><strong>exit_status</strong>: Return value when process terminates (retrieved by parent via wait)</li>
+            <li><strong>is_new_child</strong>: Flag indicating this PCB was just created by fork() (helps scheduler handle new processes)</li>
+          </ul>
+
+          <p>
+            This structure supports multiple scheduling algorithms: priority-based, Earliest Deadline First (EDF), Shortest Job First (SJF), 
+            and Completely Fair Scheduler (CFS) using red-black tree for O(log n) operations.
+          </p>
 
 <pre><code>typedef struct {
   PCB* front;  // First element in the queue

@@ -204,56 +204,131 @@
             </ul>
           </ul>
 
-        <h3>2. Helper Functions</h3>
-        <h4>scroll_screen</h4>
-          <pre><code>void scroll_screen(void)
-            {
-                volatile char *video = VGA_MEMORY;
-                for (int row = 1; row < VGA_HEIGHT; row++){
-                    for (int col = 0; col < VGA_WIDTH; col++){
-                        int from = (row * VGA_WIDTH + col) * 2;
-                        int to = ((row - 1) * VGA_WIDTH + col) * 2;
-                        video[to] = video[from];
-                        video[to+1] = video[from+1];
-                    }
-                }
-                int last_row = (VGA_HEIGHT - 1) * VGA_WIDTH * 2;
-                for (int col = 0; col < VGA_WIDTH; col++){
-                    video[last_row + col*2] = ' ';
-                    video[last_row + col*2 + 1] = 0x07;
-                }
-                vga_row = VGA_HEIGHT - 1;
-                vga_col = 0;
-            }                          
-          </code></pre>
+        <h3>2. Screen Management & Timer Functions</h3>
+        
+        <h4>Timer Initialization & Control</h4>
+          <pre><code>static volatile uint32_t timer_ticks = 0;
+
+void timer_callback(void) {
+    timer_ticks++;
+}
+
+void init_pit(uint32_t frequency) {
+    uint32_t divisor = 1193180 / frequency;
+    outb(0x43, 0x36);              // Command byte
+    outb(0x40, divisor & 0xFF);     // Low byte
+    outb(0x40, (divisor >> 8) & 0xFF); // High byte
+}
+
+void sleep_ms(uint32_t milliseconds) {
+    uint32_t ticks_to_wait = (milliseconds * 100) / 1000;
+    uint32_t start_ticks = timer_ticks;
+    while ((timer_ticks - start_ticks) < ticks_to_wait) {
+        asm volatile("hlt");
+    }
+}</code></pre>
             <ul>
-                <li>Copies each character cell (two bytes: ASCII and attribute) from the second row onward up one row.</li>
-                <li>Calculates source and destination indices in the VGA buffer for each position.</li>
-                <li>Clears the bottom row by writing spaces with attribute 0x07.</li>
-                <li>Resets the cursor to the first column of the last row.</li>
+                <li><strong>timer_ticks:</strong> Global counter incremented by timer interrupt (100 Hz)</li>
+                <li><strong>init_pit():</strong> Programs the Programmable Interval Timer to fire at specified frequency (base clock 1.193182 MHz)</li>
+                <li><strong>sleep_ms():</strong> Busy-waits for specified milliseconds using timer ticks, halting CPU between checks</li>
+                <li>Used for shutdown countdown and precise timing operations</li>
+            </ul>
+
+        <h4>Scrollback Buffer Management</h4>
+          <pre><code>typedef struct {
+    char text[80];
+    uint8_t attrs[80];
+} BufferLine;
+
+BufferLine scrollback[1000];
+BufferLine saved_screen[25];
+
+void save_top_line_to_scrollback(void) {
+    volatile char *video = VGA_MEMORY;
+    int pos = scroll_write_pos % SCROLLBACK_SIZE;
+    
+    for (int col = 0; col < VGA_WIDTH; col++) {
+        int offset = col * 2;
+        scrollback[pos].text[col] = video[offset];
+        scrollback[pos].attrs[col] = video[offset + 1];
+    }
+    scroll_write_pos++;
+    if (scroll_lines_used < SCROLLBACK_SIZE) {
+        scroll_lines_used++;
+    }
+}</code></pre>
+            <ul>
+                <li><strong>BufferLine:</strong> Stores one line of text (80 chars) plus attribute bytes</li>
+                <li><strong>scrollback[]:</strong> Circular buffer holding 1000 lines of scrollback history</li>
+                <li><strong>saved_screen[]:</strong> Preserves current 25-line display when entering scroll mode</li>
+                <li><strong>save_top_line_to_scrollback():</strong> Called before scrolling, saves top line to history before it's lost</li>
+                <li>Enables Page Up/Down navigation through output history</li>
+            </ul>
+        
+        <h4>scroll_screen</h4>
+          <pre><code>void scroll_screen(void) {
+    if (in_scroll_mode) return;  // Don't scroll while viewing history
+    
+    save_top_line_to_scrollback();  // Save top line before it's lost
+    
+    volatile char *video = VGA_MEMORY;
+    for (int row = 1; row < VGA_HEIGHT; row++){
+        for (int col = 0; col < VGA_WIDTH; col++){
+            int from = (row * VGA_WIDTH + col) * 2;
+            int to = ((row - 1) * VGA_WIDTH + col) * 2;
+            video[to] = video[from];
+            video[to+1] = video[from+1];
+        }
+    }
+    int last_row = (VGA_HEIGHT - 1) * VGA_WIDTH * 2;
+    for (int col = 0; col < VGA_WIDTH; col++){
+        video[last_row + col*2] = ' ';
+        video[last_row + col*2 + 1] = 0x07;
+    }
+    vga_row = VGA_HEIGHT - 1;
+    vga_col = 0;
+}</code></pre>
+            <ul>
+                <li><strong>Prevents scrolling during scroll mode:</strong> Returns early if user is viewing history</li>
+                <li><strong>Preserves history:</strong> Saves top line to scrollback buffer before overwriting</li>
+                <li>Copies each character cell (two bytes: ASCII and attribute) from the second row onward up one row</li>
+                <li>Calculates source and destination indices in the VGA buffer for each position</li>
+                <li>Clears the bottom row by writing spaces with attribute 0x07 (gray on black)</li>
+                <li>Resets the cursor to the first column of the last row</li>
             </ul>
         <h4>putchar</h4>
-          <pre><code>void putchar(char c)
-            {
-                volatile char *video = VGA_MEMORY;
-                if(c == '\n'){
-                    vga_row++;
-                    vga_col = 0;
-                } else {
-                    int offset = (vga_row * VGA_WIDTH + vga_col) * 2;
-                    video[offset] = c;
-                    video[offset+1] = 0x07;
-                    vga_col++;
-                    if(vga_col >= VGA_WIDTH){ vga_row++; vga_col = 0; }
-                }
-                if(vga_row >= VGA_HEIGHT) scroll_screen();
-            }                               
-          </code></pre>
+          <pre><code>void putchar(char c) {
+    if (in_scroll_mode) {
+        exit_scroll_mode();  // Exit scroll mode on any output
+    }
+    
+    volatile char *video = VGA_MEMORY;
+    if(c == '\n'){
+        vga_row++;
+        vga_col = 0;
+    } else if(c == '\b'){  // Backspace support
+        if(vga_col > 0){
+            vga_col--;
+            int offset = (vga_row * VGA_WIDTH + vga_col) * 2;
+            video[offset] = ' ';  // Clear character
+            video[offset+1] = 0x07;
+        }
+    } else {
+        int offset = (vga_row * VGA_WIDTH + vga_col) * 2;
+        video[offset] = c;
+        video[offset+1] = 0x07;
+        vga_col++;
+        if(vga_col >= VGA_WIDTH){ vga_row++; vga_col = 0; }
+    }
+    if(vga_row >= VGA_HEIGHT) scroll_screen();
+}</code></pre>
             <ul>
-              <li>Handles newline by advancing the row and resetting the column.</li>
-              <li>For other characters, computes the byte offset in VGA memory and writes the character and attribute byte.</li>
-              <li>Increments the column, wrapping to the next row when reaching the screen width.</li>
-              <li>Invokes scrolling when the cursor moves past the bottom of the screen.</li>
+              <li><strong>Scroll mode handling:</strong> Exits scroll mode if user viewing history to show new output</li>
+              <li><strong>Newline handling:</strong> Advances the row and resets the column to beginning</li>
+              <li><strong>Backspace support:</strong> Moves cursor back and clears the character visually</li>
+              <li><strong>Character rendering:</strong> Computes the byte offset in VGA memory and writes character + attribute (0x07 = gray on black)</li>
+              <li><strong>Word wrap:</strong> Increments the column, wrapping to the next row when reaching screen width (80 chars)</li>
+              <li><strong>Auto-scroll:</strong> Invokes scrolling when the cursor moves past the bottom of the screen (row 25)</li>
             </ul>
         <h4>print_to_screen</h4>
           <pre><code>void print_to_screen(const char *message)
@@ -264,18 +339,30 @@
             <ul>
               <li>Iterates through a null‑terminated string and calls putchar for each character to render the entire message on screen.</li>
             </ul>
-        <h4>Process Command</h4>
-          <pre><code>ProcessCommand process_commands[] = {
-            {"dummy1", dummy_process_1},
-            {"dummy2", dummy_process_2},
-            {"dummy3", dummy_process_3}
-        };         
-        const int num_process_commands = sizeof(process_commands)/sizeof(ProcessCommand);
-          </code></pre>
+        <h4>Process Command Table</h4>
+          <pre><code>typedef struct {
+    const char *name;
+    void (*func)(void);
+} ProcessCommand;
+
+ProcessCommand process_commands[] = {
+    {"dummy1", dummy_process_1},
+    {"dummy2", dummy_process_2},
+    {"dummy3", dummy_process_3}
+};
+const int num_process_commands = sizeof(process_commands)/sizeof(ProcessCommand);
+
+// Also available: simplesys, multisys (syscall test processes)
+extern void simplesys(void);
+extern void multisys(void);</code></pre>
             <ul>
-              <li>Defines a list of command names paired with their handler functions via a struct containing a <code>const char *name</code> and a <code>void (*func)(void)</code> pointer.</li>
-              <li>Instantiates three entries—<code>"dummy1"</code>, <code>"dummy2"</code>, and <code>"dummy3"</code>—each pointing to its corresponding <code>dummy_process_*</code> function.</li>
-              <li>Computes <code>num_process_commands</code> at compile time by dividing the total array size by the size of one <code>ProcessCommand</code> entry.</li>
+              <li><strong>ProcessCommand struct:</strong> Pairs command names with function pointers for dynamic dispatch</li>
+              <li><strong>process_commands[]:</strong> Array of available test processes that can be queued via CLI</li>
+              <li><strong>dummy1/2/3:</strong> Simple test processes demonstrating basic scheduling</li>
+              <li><strong>simplesys:</strong> Fork test with one parent creating one child (tests fork/wait/exit)</li>
+              <li><strong>multisys:</strong> Advanced test with one parent creating three children sequentially</li>
+              <li><strong>num_process_commands:</strong> Computed at compile time for loop bounds checking</li>
+              <li>New processes can be added by extending this array and implementing the function</li>
             </ul>
         <h4>read_line</h4>
           <pre><code>extern volatile int input_ready;
@@ -533,78 +620,202 @@
               </ul>
             </ul>
 
-          <h3>4. Kernel Main</h3>
-          <pre><code>void kernel_main(uint32_t multiboot_info)
-            {
-                serial_init();
-                debug_print("DEBUG: Entering kernel_main.");
-                for (int i = 1; i <= 30; i++){
-                    print_to_screen("Debug: line ");
-                    char num[10];
-                    int_to_str(i, num);
-                    print_to_screen(num);
-                    print_to_screen("\n");
-                }
-                memory_init(multiboot_info);
-                debug_print("DEBUG: Memory initialized.");
-            
-                create_file_system();
-                debug_print("DEBUG: Filesystem initialized.");
-                
-                gdt_install();
-                print_to_screen("DEBUG: GDT installed.\n");
-                pic_remap();
-                idt_install();
-                irq_install();
-                print_to_screen("DEBUG: IDT and IRQ handlers installed.\n");
-                init_keyboard();
-                
-                print_to_screen("DEBUG: Keyboard initialized. Press keys!\n");
-                asm volatile("sti");
-                init_syscalls();
-                debug_print("DEBUG: System calls initialized.");
-            
-                init_process_management();
-                debug_print("DEBUG: Process management initialized.");
-                cli_loop();
-                
-                asm volatile("cli");
-                print_to_screen("Kernel execution terminated.\n");
-                while(1){ asm volatile("hlt"); }
-            }            
-          </code></pre>
-            <ul>
-              <ul>
-                <li>Initializes serial communication.</li>
-                <li>Prints a debug message indicating entry into kernel_main.</li>
-                <li>Outputs thirty lines of on‑screen debug text, numbering each line from 1 to 30.</li>
-                <li>Calls memory_init with the Multiboot information to set up the kernel heap, then logs that memory is initialized.</li>
-                <li>Invokes create_file_system to initialize the filesystem, then logs that the filesystem is ready.</li>
-                <li>Installs the Global Descriptor Table and prints a confirmation.</li>
-                <li>Remaps the PIC, installs the Interrupt Descriptor Table, and sets up IRQ handlers, then prints confirmation of IDT/IRQ setup.</li>
-                <li>Initializes keyboard input and notifies the user that key presses will be handled.</li>
-                <li>Executes the sti instruction to enable CPU interrupts.</li>
-                <li>Calls init_syscalls to set up system call handling, then logs that syscalls are initialized.</li>
-                <li>Calls init_process_management to prepare process queues and related structures, then logs that process management is initialized.</li>
-                <li>Enters the command‑line interface loop (cli_loop), handing control to user commands.</li>
-                <li>Upon exiting the CLI, executes the cli instruction to disable interrupts, prints a termination message, and enters an infinite hlt loop to halt the CPU.</li>
-              </ul>
-            </ul>
+          <h3>4. Kernel Main - Initialization Sequence</h3>
+          <pre><code>void kernel_main(uint32_t multiboot_info) {
+    serial_init();
+    debug_print("DEBUG: Entering kernel_main.");
+    
+    // Display 30 debug lines for testing scrollback buffer
+    for (int i = 1; i <= 30; i++){
+        print_to_screen("Debug: line ");
+        char num[10];
+        int_to_str(i, num);
+        print_to_screen(num);
+        print_to_screen("\n");
+    }
+    
+    memory_init(multiboot_info);
+    debug_print("DEBUG: Memory initialized.");
 
+    create_file_system();
+    debug_print("DEBUG: Filesystem initialized.");
+    
+    init_user_system();  // Initialize multi-user support
+    debug_print("DEBUG: User system initialized.");
+    
+    gdt_install();
+    print_to_screen("DEBUG: GDT installed.\n");
+    pic_remap();
+    idt_install();
+    irq_install();
+    print_to_screen("DEBUG: IDT and IRQ handlers installed.\n");
+    init_keyboard();
+    init_pit(100);  // Initialize timer at 100 Hz
+    register_interrupt_handler(32, timer_callback);
+    
+    print_to_screen("DEBUG: Keyboard initialized. Press keys!\n");
+    asm volatile("sti");  // Enable interrupts
+    init_syscalls();
+    debug_print("DEBUG: System calls initialized.");
+
+    init_process_management();
+    debug_print("DEBUG: Process management initialized.");
+    cli_loop();  // Enter interactive shell
+    
+    asm volatile("cli");
+    print_to_screen("Kernel execution terminated.\n");
+    while(1){ asm volatile("hlt"); }
+}</code></pre>
+
+          <h4>Initialization Order & Rationale:</h4>
+          <ol>
+            <li><strong>Serial Communication:</strong> Enables debug output to serial console (critical for development/debugging)</li>
+            <li><strong>Entry Message:</strong> Confirms kernel successfully reached C code from bootloader</li>
+            <li><strong>Scrollback Test:</strong> Prints 30 lines to test VGA output and populate scrollback buffer for Page Up/Down testing</li>
+            <li><strong>Memory Management:</strong> Parses Multiboot info, sets up page tables, initializes kernel heap
+              <ul>
+                <li>Must happen before any dynamic allocation</li>
+                <li>Establishes virtual memory framework</li>
+              </ul>
+            </li>
+            <li><strong>Filesystem:</strong> Formats simulated disk, initializes inode table, creates root directory
+              <ul>
+                <li>Sets up in-memory filesystem (1024 blocks × 4KB each)</li>
+                <li>Creates hierarchical directory structure</li>
+              </ul>
+            </li>
+            <li><strong>User System:</strong> Creates root user, initializes user authentication structures
+              <ul>
+                <li>Sets up multi-user support with password hashing</li>
+                <li>Creates user_space_inodes array for isolated file spaces</li>
+              </ul>
+            </li>
+            <li><strong>GDT (Global Descriptor Table):</strong> Sets up memory segments for kernel/user mode
+              <ul>
+                <li>Configures code and data segments</li>
+                <li>Enables protected mode memory protection</li>
+              </ul>
+            </li>
+            <li><strong>PIC Remapping:</strong> Moves hardware IRQs from 0x08-0x0F to 0x20-0x2F
+              <ul>
+                <li>Prevents conflict with CPU exceptions (0x00-0x1F)</li>
+                <li>Critical for proper interrupt handling</li>
+              </ul>
+            </li>
+            <li><strong>IDT (Interrupt Descriptor Table):</strong> Installs interrupt handlers for exceptions and IRQs
+              <ul>
+                <li>Sets up gates for all 256 interrupt vectors</li>
+                <li>Configures privilege levels and handler addresses</li>
+              </ul>
+            </li>
+            <li><strong>IRQ Handlers:</strong> Registers specific handlers for timer, keyboard, etc.</li>
+            <li><strong>Keyboard Driver:</strong> Initializes PS/2 keyboard controller and scancode translation tables
+              <ul>
+                <li>Sets up command history arrays</li>
+                <li>Configures shift/caps lock state tracking</li>
+              </ul>
+            </li>
+            <li><strong>PIT (Programmable Interval Timer):</strong> Programs timer to fire at 100 Hz
+              <ul>
+                <li>Provides timing for sleep_ms() and shutdown countdown</li>
+                <li>Divisor = 1193180 / 100 = 11932</li>
+              </ul>
+            </li>
+            <li><strong>Timer Callback:</strong> Registers timer_callback to increment timer_ticks on IRQ0</li>
+            <li><strong>Enable Interrupts:</strong> <code>sti</code> instruction allows hardware interrupts to fire
+              <ul>
+                <li>Must happen AFTER all interrupt handlers are installed</li>
+                <li>Enables keyboard input and timer</li>
+              </ul>
+            </li>
+            <li><strong>System Calls:</strong> Sets up syscall interface for fork/wait/yield/exit
+              <ul>
+                <li>Configures software interrupt mechanism</li>
+                <li>Enables process management syscalls</li>
+              </ul>
+            </li>
+            <li><strong>Process Management:</strong> Initializes ready queue, zombie list, scheduler
+              <ul>
+                <li>Sets up round-robin scheduling</li>
+                <li>Prepares process table and PID allocation</li>
+              </ul>
+            </li>
+            <li><strong>CLI Loop:</strong> Enters interactive command-line interface
+              <ul>
+                <li>Displays username@path> prompt</li>
+                <li>Processes user commands until "exit"</li>
+                <li>Handles file/directory/process/user operations</li>
+              </ul>
+            </li>
+            <li><strong>Shutdown:</strong> Disables interrupts, prints termination message, halts CPU forever</li>
+          </ol>
+
+          <h4>Debug Output Sequence:</h4>
+          <pre><code>DEBUG: Entering kernel_main.
+Debug: line 1
+...
+Debug: line 30
+DEBUG: Kernel memory initialized.
+DEBUG: Memory initialized.
+DEBUG: Disk formatted and file system reset.
+DEBUG: File system created.
+DEBUG: Filesystem initialized.
+DEBUG: User system initialized with root user.
+DEBUG: User system initialized.
+DEBUG: GDT installed.
+DEBUG: IDT and IRQ handlers installed.
+DEBUG: Keyboard initialized. Press keys!
+DEBUG: System calls initialized
+DEBUG: System calls initialized.
+DEBUG: Process queues initialized.
+DEBUG: Process management system initialized.
+DEBUG: Process management initialized.
+
+root@/> _  [Interactive prompt appears]</code></pre>
             </section>
         <!-- Conclusion -->
         <section>
-          <h2>Conclusion & Next Steps</h2>
+          <h2>Conclusion & Current Status</h2>
           <p>
-            This deep dive has covered how ApnaOS transitions from bootloader to a running kernel: parsing Multiboot info, setting up memory and I/O, configuring CPU structures, and enabling multitasking and filesystem access through the CLI. Future work includes:
+            ApnaOS has evolved from a basic kernel into a fully functional operating system demonstrating core OS concepts. The kernel successfully handles:
           </p>
+          
+          <h4>✅ Implemented Features:</h4>
           <ul>
-            <li>Implementing paging and virtual memory.</li>
-            <li>Adding dynamic kernel heap allocators.</li>
-            <li>Extending the filesystem to persistent storage.</li>
-            <li>Developing user-mode drivers and IPC mechanisms.</li>
-            <li>Enhancing the CLI with scripting and pipelines.</li>
+            <li><strong>Multiboot bootloader:</strong> GRUB-based boot with protected mode transition</li>
+            <li><strong>Memory management:</strong> Paging with page tables, kernel heap allocation</li>
+            <li><strong>Interrupt handling:</strong> IDT, PIC remapping, ISRs for exceptions and IRQs</li>
+            <li><strong>VGA text mode:</strong> 80×25 display with scrollback buffer (1000 lines)</li>
+            <li><strong>Scrolling navigation:</strong> Page Up/Down for history, ESC to exit scroll mode</li>
+            <li><strong>Timer support:</strong> PIT at 100Hz for sleep_ms() and shutdown countdown</li>
+            <li><strong>Keyboard driver:</strong> Full scancode support including extended keys (arrows, Page Up/Down)</li>
+            <li><strong>Command history:</strong> Per-user history (20 commands) with up/down arrow navigation</li>
+            <li><strong>Filesystem:</strong> Inode-based with hierarchical directories, full path traversal (cd path/to/dir, cd .., cd ~)</li>
+            <li><strong>Multi-user system:</strong> Password-protected user spaces with isolated file systems</li>
+            <li><strong>User authentication:</strong> Password hashing and secure user switching</li>
+            <li><strong>Access control:</strong> Owner-based file permissions (root can access all)</li>
+            <li><strong>Process management:</strong> Round-robin scheduler with PCB and context switching</li>
+            <li><strong>System calls:</strong> fork, wait, yield, exit for process control</li>
+            <li><strong>Interactive CLI:</strong> Comprehensive shell with 30+ commands</li>
+            <li><strong>Test programs:</strong> simplesys (single fork) and multisys (multiple forks) demonstrating syscalls</li>
           </ul>
+
+          <h4>🎯 Future Enhancements:</h4>
+          <ul>
+            <li><strong>Copy-on-write:</strong> Optimize fork by sharing pages until write occurs</li>
+            <li><strong>Persistent storage:</strong> Extend filesystem to real disk or virtual disk image</li>
+            <li><strong>exec syscall:</strong> Load and execute new programs (replacing current process)</li>
+            <li><strong>Pipes & redirection:</strong> Implement | and > operators for command chaining</li>
+            <li><strong>User-mode processes:</strong> Run processes in ring 3 with proper privilege separation</li>
+            <li><strong>IPC mechanisms:</strong> Message queues, shared memory, semaphores</li>
+            <li><strong>Dynamic linking:</strong> Load shared libraries at runtime</li>
+            <li><strong>Networking stack:</strong> TCP/IP implementation for network communication</li>
+            <li><strong>Graphics mode:</strong> VESA/framebuffer support beyond VGA text mode</li>
+          </ul>
+
+          <p>
+            The kernel demonstrates a complete OS foundation suitable for education and further development. Each component is well-documented, modular, and extensible, making it an excellent learning resource for operating system concepts.
+          </p>
         </section>
 
       </article>

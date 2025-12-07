@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Building a Filesystem from Scratch | ApnaOS Blog</title>
+  <link rel="stylesheet" href="../css/style.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+</head>
+<body>
+  <a href="../index.html" class="home-link">
+    <i class="fas fa-house"></i> Home
+  </a>
+
+  <div class="container">
+    <header class="site-header">
+      <h1>Building a Filesystem: From Inodes to Directories</h1>
+      <p class="post-meta">Posted on September 10, 2025</p>
+    </header>
+
+    <main>
+      <article class="blog-post">
+        <h2>Why Build a Filesystem?</h2>
+        <p>
+          Processes are cool, but without persistent storage, everything disappears when the OS reboots. We needed a way 
+          to organize files and directories in memory (and eventually on disk). Enter: the filesystem!
+        </p>
+
+        <h2>Design Decisions</h2>
+        <p>We chose an <strong>inode-based design</strong> similar to Unix filesystems:</p>
+        <ul>
+          <li>Each file/directory has an inode containing metadata</li>
+          <li>Inodes store file size, type (file/directory), and owner</li>
+          <li>Directories are just files containing (name → inode_id) mappings</li>
+          <li>Path traversal walks the directory tree from root</li>
+        </ul>
+
+        <h2>The Inode Structure</h2>
+        <pre><code>typedef struct Inode {
+    uint32_t id;              // Unique inode number
+    uint32_t size;            // File size in bytes
+    uint32_t type;            // FILE or DIRECTORY
+    uint32_t owner_id;        // User who owns this file
+    char data[MAX_FILE_SIZE]; // Actual content
+    struct Inode* next;       // Linked list of all inodes
+} Inode;</code></pre>
+
+        <h2>Directory Entries</h2>
+        <p>
+          Directories store a list of entries mapping filenames to inode IDs:
+        </p>
+
+        <pre><code>typedef struct DirEntry {
+    char name[MAX_FILENAME];
+    uint32_t inode_id;
+} DirEntry;
+
+// Directory inode's data contains an array of DirEntry structs</code></pre>
+
+        <h2>Creating Files and Directories</h2>
+        <pre><code>Inode* fs_create_file(const char* path, uint32_t owner_id) {
+    // 1. Parse path to get parent directory and filename
+    char parent_path[256], filename[64];
+    split_path(path, parent_path, filename);
+    
+    // 2. Find parent directory inode
+    Inode* parent = fs_resolve_path(parent_path);
+    if (!parent || parent->type != TYPE_DIRECTORY) {
+        return NULL;  // Parent doesn't exist
+    }
+    
+    // 3. Check permissions (only owner or root can create)
+    if (!can_modify(parent, current_user_id)) {
+        return NULL;  // Permission denied
+    }
+    
+    // 4. Create new inode
+    Inode* file = allocate_inode();
+    file->type = TYPE_FILE;
+    file->size = 0;
+    file->owner_id = owner_id;
+    
+    // 5. Add entry to parent directory
+    DirEntry* entries = (DirEntry*)parent->data;
+    entries[parent->size / sizeof(DirEntry)].inode_id = file->id;
+    strcpy(entries[parent->size / sizeof(DirEntry)].name, filename);
+    parent->size += sizeof(DirEntry);
+    
+    return file;
+}</code></pre>
+
+        <h2>Path Traversal</h2>
+        <p>
+          Walking a path like <code>/home/user/file.txt</code> requires splitting it and following directory entries:
+        </p>
+
+        <pre><code>Inode* fs_resolve_path(const char* path) {
+    if (path[0] == '\0') return NULL;
+    
+    Inode* current = (path[0] == '/') ? root_inode : current_dir;
+    
+    char token[64];
+    int i = (path[0] == '/') ? 1 : 0;
+    
+    while (path[i]) {
+        // Extract next path component
+        int j = 0;
+        while (path[i] && path[i] != '/') {
+            token[j++] = path[i++];
+        }
+        token[j] = '\0';
+        
+        if (j == 0) break;  // Empty component
+        
+        // Special cases
+        if (strcmp(token, ".") == 0) {
+            continue;  // Stay in current directory
+        } else if (strcmp(token, "..") == 0) {
+            current = get_parent_directory(current);
+            continue;
+        }
+        
+        // Look up in current directory
+        current = find_in_directory(current, token);
+        if (!current) return NULL;  // Not found
+        
+        if (path[i] == '/') i++;  // Skip separator
+    }
+    
+    return current;
+}</code></pre>
+
+        <h2>Multi-User Access Control</h2>
+        <p>
+          We added user-based permissions: each inode has an owner, and only the owner (or root) can modify it:
+        </p>
+
+        <pre><code>bool can_read(Inode* inode, uint32_t user_id) {
+    return true;  // Everyone can read for now
+}
+
+bool can_modify(Inode* inode, uint32_t user_id) {
+    // Root can do anything
+    if (user_id == 0) return true;
+    
+    // Owner can modify
+    return (inode->owner_id == user_id);
+}</code></pre>
+
+        <h2>Implementing Common Commands</h2>
+
+        <h3>ls - List Directory</h3>
+        <pre><code>void cmd_ls(const char* path) {
+    Inode* dir = fs_resolve_path(path);
+    if (!dir || dir->type != TYPE_DIRECTORY) {
+        print("Error: Not a directory\n");
+        return;
+    }
+    
+    DirEntry* entries = (DirEntry*)dir->data;
+    int count = dir->size / sizeof(DirEntry);
+    
+    for (int i = 0; i < count; i++) {
+        Inode* entry = get_inode_by_id(entries[i].inode_id);
+        
+        // Print type indicator
+        print(entry->type == TYPE_DIRECTORY ? "[DIR]  " : "[FILE] ");
+        print(entries[i].name);
+        print("\n");
+    }
+}</code></pre>
+
+        <h3>cat - Read File</h3>
+        <pre><code>void cmd_cat(const char* path) {
+    Inode* file = fs_resolve_path(path);
+    if (!file) {
+        print("Error: File not found\n");
+        return;
+    }
+    
+    if (file->type != TYPE_FILE) {
+        print("Error: Not a file\n");
+        return;
+    }
+    
+    // Print file contents
+    for (uint32_t i = 0; i < file->size; i++) {
+        putchar(file->data[i]);
+    }
+    putchar('\n');
+}</code></pre>
+
+        <h3>cd - Change Directory</h3>
+        <pre><code>void cmd_cd(const char* path) {
+    if (strcmp(path, "~") == 0) {
+        // Go to user's home directory
+        current_dir = user_home_dirs[current_user_id];
+        return;
+    }
+    
+    Inode* dir = fs_resolve_path(path);
+    if (!dir) {
+        print("Error: Directory not found\n");
+        return;
+    }
+    
+    if (dir->type != TYPE_DIRECTORY) {
+        print("Error: Not a directory\n");
+        return;
+    }
+    
+    current_dir = dir;
+}</code></pre>
+
+        <h2>The Home Directory Challenge</h2>
+        <p>
+          Each user needs their own home directory. We created a <code>/home</code> structure:
+        </p>
+
+        <pre><code>void init_filesystem() {
+    // Create root directory
+    root_inode = allocate_inode();
+    root_inode->type = TYPE_DIRECTORY;
+    root_inode->owner_id = 0;  // Root user
+    
+    // Create /home
+    Inode* home = fs_create_directory("/home", 0);
+    
+    // Create /home/root
+    user_home_dirs[0] = fs_create_directory("/home/root", 0);
+    
+    current_dir = root_inode;
+}</code></pre>
+
+        <h2>User Isolation</h2>
+        <p>
+          When users switch, they start in their own home directory and can't access other users' files 
+          (unless they're root):
+        </p>
+
+        <pre><code>void switch_user(uint32_t user_id) {
+    current_user_id = user_id;
+    current_dir = user_home_dirs[user_id];
+    
+    print("Switched to ");
+    print(users[user_id].username);
+    print("'s home directory\n");
+}</code></pre>
+
+        <h2>Debugging War Stories</h2>
+        <div class="warning-message">
+          <i class="fas fa-bug"></i>
+          <strong>Bug that took 2 days:</strong> Path traversal with ".." was going past root and corrupting memory! 
+          We forgot to check if the parent was NULL before following it.
+        </div>
+
+        <pre><code>Inode* get_parent_directory(Inode* inode) {
+    if (inode == root_inode) {
+        return root_inode;  // Root's parent is itself!
+    }
+    // ... actual parent lookup ...
+}</code></pre>
+
+        <h2>What We Learned</h2>
+        <ul>
+          <li>Inodes make file management elegant and flexible</li>
+          <li>Path traversal is trickier than it looks (edge cases everywhere!)</li>
+          <li>User permissions add complexity but are essential</li>
+          <li>In-memory filesystems are fast but limited by RAM</li>
+        </ul>
+
+        <h2>Next Steps</h2>
+        <p>Our filesystem works great in RAM, but the next challenge is persistence:</p>
+        <ul>
+          <li>Write filesystem to disk image</li>
+          <li>Implement disk I/O drivers (ATA/IDE)</li>
+          <li>Add journaling for crash recovery</li>
+          <li>Support larger files with indirect blocks</li>
+        </ul>
+
+        <p class="post-navigation">
+          <a href="process-management.html">← Previous: Process Management</a>
+          <a href="multi-user-system.html">Next: Multi-User System →</a>
+        </p>
+      </article>
+    </main>
+
+    <footer>© 2025 ApnaOS Team</footer>
+  </div>
+</body>
+</html>

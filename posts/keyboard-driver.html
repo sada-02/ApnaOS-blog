@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Building a Keyboard Driver | ApnaOS Blog</title>
+  <link rel="stylesheet" href="../css/style.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+</head>
+<body>
+  <a href="../index.html" class="home-link">
+    <i class="fas fa-house"></i> Home
+  </a>
+
+  <div class="container">
+    <header class="site-header">
+      <h1>Building a Keyboard Driver from Scratch</h1>
+      <p class="post-meta">Posted on June 3, 2025</p>
+    </header>
+
+    <main>
+      <article class="blog-post">
+        <h2>From Scancodes to Characters</h2>
+        <p>
+          With interrupts working, we could receive keyboard events, but the raw data from the keyboard (scancodes) 
+          needed translation to actual characters. This turned out to be more complex than expected!
+        </p>
+
+        <h2>Understanding Scancodes</h2>
+        <p>
+          When you press a key, the keyboard controller sends a scancode to port 0x60. There are two types:
+        </p>
+        <ul>
+          <li><strong>Make codes:</strong> Sent when a key is pressed (e.g., 0x1E for 'A')</li>
+          <li><strong>Break codes:</strong> Sent when released (same code + 0x80, e.g., 0x9E)</li>
+        </ul>
+
+        <h3>The Extended Scancode Problem</h3>
+        <p>
+          Arrow keys, Page Up/Down, and other special keys send <strong>extended scancodes</strong> starting with 0xE0. 
+          We initially missed this and wondered why arrow keys didn't work!
+        </p>
+
+        <pre><code>void keyboard_handler() {
+    uint8_t scancode = inb(0x60);
+    
+    if (scancode == 0xE0) {
+        // Next byte is the actual code
+        extended_code = 1;
+        return;
+    }
+    
+    if (extended_code) {
+        handle_extended_key(scancode);
+        extended_code = 0;
+        return;
+    }
+    
+    handle_normal_key(scancode);
+}</code></pre>
+
+        <h2>The Scancode Translation Table</h2>
+        <p>We created a lookup table mapping scancodes to ASCII characters:</p>
+
+        <pre><code>static const char scancode_to_ascii[128] = {
+    0, 27, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\b',
+    '\t', 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']', '\n',
+    0, 'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\'', '`',
+    0, '\\', 'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/', 0,
+    '*', 0, ' ', 0,  // Space bar at scancode 57
+    // ... function keys, etc.
+};</code></pre>
+
+        <h2>Handling Modifier Keys</h2>
+        <p>
+          Shift, Ctrl, and Alt don't produce characters themselves—they modify other keys. We tracked their state:
+        </p>
+
+        <pre><code>static bool shift_pressed = false;
+static bool ctrl_pressed = false;
+static bool alt_pressed = false;
+
+void handle_normal_key(uint8_t scancode) {
+    bool released = (scancode & 0x80);
+    scancode &= 0x7F;  // Remove release bit
+    
+    // Track modifier states
+    if (scancode == 0x2A || scancode == 0x36) {  // Left/Right Shift
+        shift_pressed = !released;
+        return;
+    }
+    
+    if (released) return;  // Ignore key releases
+    
+    char c = scancode_to_ascii[scancode];
+    if (shift_pressed && c >= 'a' && c <= 'z') {
+        c = c - 'a' + 'A';  // Convert to uppercase
+    }
+    
+    input_buffer[input_pos++] = c;
+}</code></pre>
+
+        <h2>The Arrow Key Challenge</h2>
+        <p>
+          Arrow keys use extended scancodes (0xE0 prefix). We initially handled them in the wrong code path, 
+          which is why command history navigation was broken for weeks!
+        </p>
+
+        <pre><code>void handle_extended_key(uint8_t scancode) {
+    if (scancode == 0x48) {  // Up arrow
+        history_previous();
+    } else if (scancode == 0x50) {  // Down arrow
+        history_next();
+    } else if (scancode == 0x49) {  // Page Up
+        scroll_up();
+    } else if (scancode == 0x51) {  // Page Down
+        scroll_down();
+    }
+}</code></pre>
+
+        <h2>Adding Command History</h2>
+        <p>
+          With arrow keys working, we implemented command history (up to 20 commands per user):
+        </p>
+
+        <pre><code>typedef struct {
+    char history[MAX_HISTORY][MAX_COMMAND_LENGTH];
+    int history_count;
+    int history_index;
+} UserHistory;
+
+void history_previous() {
+    if (history_index > 0) {
+        history_index--;
+        strcpy(input_buffer, users[current_user_id].history[history_index]);
+        redraw_input_line();
+    }
+}</code></pre>
+
+        <h2>Debugging Stories</h2>
+        <div class="warning-message">
+          <i class="fas fa-bug"></i>
+          <strong>Bug we spent days on:</strong> Backspace wasn't working properly because we forgot to check 
+          if the cursor was at the start of the line. We kept getting negative indices and random memory corruption!
+        </div>
+
+        <pre><code>void handle_backspace() {
+    if (cursor_x == 0) {  // Don't go back past start!
+        return;
+    }
+    cursor_x--;
+    putchar(' ');   // Overwrite character
+    cursor_x--;     // Move back again
+    update_cursor();
+}</code></pre>
+
+        <h2>The Final Result</h2>
+        <p>After all this work, we had:</p>
+        <ul>
+          <li>✅ Full keyboard input with all printable characters</li>
+          <li>✅ Shift modifier for uppercase and symbols</li>
+          <li>✅ Backspace, Tab, and Enter working correctly</li>
+          <li>✅ Arrow key navigation through command history</li>
+          <li>✅ Page Up/Down for scrollback buffer</li>
+          <li>✅ ESC key to exit scroll mode</li>
+        </ul>
+
+        <p class="post-navigation">
+          <a href="implementing-interrupts.html">← Previous: Implementing Interrupts</a>
+          <a href="process-management.html">Next: Process Management →</a>
+        </p>
+      </article>
+    </main>
+
+    <footer>© 2025 ApnaOS Team</footer>
+  </div>
+</body>
+</html>

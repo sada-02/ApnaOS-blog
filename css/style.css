@@ -146,6 +146,142 @@ color: #999;
 font-size: 0.9em;
 }
 
+/* Blog post styling */
+.blog-post {
+  max-width: 900px;
+  line-height: 1.7;
+}
+
+.blog-post h2 {
+  color: #2c3e50;
+  margin-top: 2rem;
+  margin-bottom: 1rem;
+  font-size: 1.8em;
+  border-bottom: 2px solid #007acc;
+  padding-bottom: 0.5rem;
+}
+
+.blog-post h3 {
+  color: #34495e;
+  margin-top: 1.5rem;
+  margin-bottom: 0.8rem;
+  font-size: 1.4em;
+}
+
+.blog-post h4 {
+  color: #445566;
+  margin-top: 1.2rem;
+  margin-bottom: 0.6rem;
+  font-size: 1.2em;
+}
+
+.blog-post p {
+  margin-bottom: 1.2rem;
+  color: #333;
+}
+
+.blog-post ul, .blog-post ol {
+  margin-left: 2rem;
+  margin-bottom: 1.2rem;
+}
+
+.blog-post li {
+  margin-bottom: 0.5rem;
+  line-height: 1.6;
+}
+
+.blog-post pre {
+  background: #f8f9fa;
+  border: 1px solid #ddd;
+  border-left: 3px solid #007acc;
+  padding: 1rem;
+  overflow-x: auto;
+  border-radius: 4px;
+  margin-bottom: 1.5rem;
+}
+
+.blog-post code {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.9em;
+  background: #f4f4f4;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.blog-post pre code {
+  background: none;
+  padding: 0;
+}
+
+/* Message boxes */
+.success-message, .warning-message, .info-message {
+  padding: 1rem;
+  margin: 1.5rem 0;
+  border-radius: 6px;
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.success-message {
+  background: #d4edda;
+  border-left: 4px solid #28a745;
+  color: #155724;
+}
+
+.warning-message {
+  background: #fff3cd;
+  border-left: 4px solid #ffc107;
+  color: #856404;
+}
+
+.info-message {
+  background: #d1ecf1;
+  border-left: 4px solid #17a2b8;
+  color: #0c5460;
+}
+
+.success-message i, .warning-message i, .info-message i {
+  font-size: 1.5rem;
+  margin-top: 0.2rem;
+}
+
+.success-message ul, .warning-message ul, .info-message ul {
+  margin-top: 0.5rem;
+  margin-bottom: 0;
+}
+
+/* Post navigation */
+.post-navigation {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 3rem;
+  padding-top: 2rem;
+  border-top: 2px solid #e0e0e0;
+  gap: 1rem;
+}
+
+.post-navigation a {
+  color: #007acc;
+  text-decoration: none;
+  font-weight: 500;
+  padding: 0.5rem 1rem;
+  border: 1px solid #007acc;
+  border-radius: 4px;
+  transition: all 0.3s ease;
+}
+
+.post-navigation a:hover {
+  background: #007acc;
+  color: white;
+}
+
+.post-meta {
+  color: #777;
+  font-style: italic;
+  margin-bottom: 2rem;
+}
+
 /* Responsive: stack on small screens */
 @media (max-width: 768px) {
 .content {
@@ -154,5 +290,8 @@ font-size: 0.9em;
 .content aside#recent-posts {
     margin-left: 0;
     margin-top: 1.5rem;
+}
+.post-navigation {
+    flex-direction: column;
 }
 } 

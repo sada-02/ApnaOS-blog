@@ -409,15 +409,131 @@ static const char scancode_to_ascii_shift[128] = {
   Tokenizes a string by delimiter characters in delim. On the first call you pass in the string to split; subsequent calls pass NULL to continue where it left off. Skips any leading delimiters, then returns the next token (null‑terminated in place), advancing an internal pointer for the next call. Returns NULL when no tokens remain.
 </ul> 
 
-        <!-- Extensibility -->
+        <!-- Implemented Features -->
         <section>
-          <h2>Extensibility & Future Features</h2>
+          <h2>Implemented CLI Features</h2>
+          
+          <h3>1. Command History Navigation</h3>
+          <p>ApnaOS implements a per-user command history system storing the last 20 commands for each user:</p>
+          <pre><code>// Command history structure (3D array)
+static char command_history[MAX_USERS][HISTORY_SIZE][BUFFER_SIZE];
+static int history_count[MAX_USERS];
+static int current_history_user = 0;
+
+// Navigate with Up/Down arrow keys
+void keyboard_handler() {
+    // Extended scancode handling for arrow keys
+    if (extended_code && scancode == 0x48) {  // Up arrow
+        if (history_count[current_history_user] > 0) {
+            restore_from_history(history_index);
+        }
+    }
+    if (extended_code && scancode == 0x50) {  // Down arrow
+        // Navigate forward in history
+    }
+}</code></pre>
           <ul>
-            <li><strong>Tab Completion:</strong> Suggest commands and filenames.</li>
-            <li><strong>Command History:</strong> Store past commands in a circular buffer.</li>
-            <li><strong>Piping:</strong> Implement in‑kernel pipes and redirection.</li>
-            <li><strong>Scripting:</strong> Execute batch files or scripts.</li>
-            <li><strong>ANSI Escape Codes:</strong> Colorize output and control cursor.</li>
+            <li><strong>Per-User History:</strong> Each user has their own command history that persists across session switches</li>
+            <li><strong>Context Switching:</strong> When switching users via openuser/root, history context automatically updates</li>
+            <li><strong>Navigation:</strong> Use Up arrow to recall previous commands, Down arrow to move forward</li>
+            <li><strong>Capacity:</strong> Stores 20 commands per user in a circular buffer (oldest commands are overwritten)</li>
+          </ul>
+
+          <h3>2. Scrollback Buffer</h3>
+          <p>Navigate through screen output beyond the visible 25 lines:</p>
+          <pre><code>typedef struct {
+    char text[80];
+    uint8_t attrs[80];
+} BufferLine;
+
+BufferLine scrollback[1000];  // 1000-line buffer
+int scrollback_position = 0;
+
+// Page Up - scroll backward
+// Page Down - scroll forward  
+// ESC - exit scroll mode and return to live output</code></pre>
+          <ul>
+            <li><strong>Buffer Size:</strong> Stores last 1000 lines of output with colors/attributes</li>
+            <li><strong>Page Up/Down:</strong> Navigate through historical output using extended keyboard scancodes</li>
+            <li><strong>ESC Key:</strong> Exit scroll mode and return to live terminal display</li>
+            <li><strong>State Preservation:</strong> Current screen is saved when entering scroll mode and restored on exit</li>
+          </ul>
+
+          <h3>3. Available Commands</h3>
+          
+          <h4>File Operations</h4>
+          <pre><code>file make &lt;name&gt;              # Create a new file
+file write &lt;name&gt; &lt;content&gt;   # Write content to file
+file read &lt;name&gt;              # Display file contents
+file list                     # List all files
+file delete &lt;name&gt;            # Remove a file</code></pre>
+
+          <h4>Directory Operations</h4>
+          <pre><code>mkdir &lt;name&gt;                  # Create directory
+cd &lt;path&gt;                     # Change directory
+cd ..                         # Go to parent directory
+cd ~                          # Go to home directory
+cd path/to/dir                # Navigate with full paths
+pwd                           # Print working directory
+ls                            # List current directory</code></pre>
+
+          <h4>Process Management</h4>
+          <pre><code>process dummy1 [priority]     # Queue dummy test process
+process dummy2 [priority]     # Queue another dummy process  
+process dummy3 [priority]     # Queue third dummy process
+process simplesys             # Run simple fork test (1 parent → 1 child)
+process multisys              # Run multiple forks test (1 parent → 3 children)
+process start                 # Start the scheduler and run queued processes</code></pre>
+
+          <h4>User Management</h4>
+          <pre><code>createuser &lt;username&gt;         # Create new user (prompts for password)
+openuser &lt;username&gt;           # Switch to user (prompts for password)
+root                          # Return to root directory
+whoami                        # Display current user</code></pre>
+
+          <h4>System Commands</h4>
+          <pre><code>help                          # Show comprehensive command list
+exit                          # Shutdown system (10-second countdown)</code></pre>
+
+          <h3>4. User-Aware CLI Prompt</h3>
+          <p>The command prompt displays current user and path:</p>
+          <pre><code>// Example prompts:
+root@/> ls                    // Root user in root directory
+user1@/home/user1> pwd        // User1 in their home directory
+root@/home/user1> ls          // Root accessing user1's directory</code></pre>
+
+          <h3>5. Input Processing</h3>
+          <ul>
+            <li><strong>Backspace Support:</strong> Properly removes characters from both buffer and VGA display</li>
+            <li><strong>Shift & Caps Lock:</strong> Handles uppercase/lowercase conversion with XOR logic</li>
+            <li><strong>Extended Scancodes:</strong> Processes 0xE0 prefix for arrow keys, Page Up/Down</li>
+            <li><strong>Line Editing:</strong> Real-time character echo and cursor management</li>
+          </ul>
+
+          <h3>6. Error Handling & Help</h3>
+          <pre><code>// Unknown command feedback
+if (!command_found) {
+    print_to_screen("Unknown command: 'xyz'\n");
+    print_to_screen("Type 'help' for available commands.\n");
+}
+
+// Usage hints for incorrect syntax
+if (!token2) {
+    print_to_screen("Usage: process &lt;name&gt; [priority]\n");
+    print_to_screen("Available: dummy1, dummy2, dummy3, simplesys, multisys, start\n");
+}</code></pre>
+        </section>
+
+        <!-- Future Enhancements -->
+        <section>
+          <h2>Potential Future Enhancements</h2>
+          <ul>
+            <li><strong>Tab Completion:</strong> Auto-complete commands and filenames</li>
+            <li><strong>Piping & Redirection:</strong> Implement | and > operators for command chaining</li>
+            <li><strong>Command Aliases:</strong> Allow users to define custom shortcuts</li>
+            <li><strong>Scripting:</strong> Execute batch files with multiple commands</li>
+            <li><strong>ANSI Escape Codes:</strong> Add color support and cursor positioning</li>
+            <li><strong>Job Control:</strong> Background processes with & operator</li>
           </ul>
         </section>
 
@@ -425,7 +541,7 @@ static const char scancode_to_ascii_shift[128] = {
         <section>
           <h2>Conclusion</h2>
           <p>
-            ApnaOS’s CLI showcases how a kernel‑level shell can be constructed from low‑level primitives—interrupts, buffers, and simple parsers—yet remain highly extensible as the OS grows.
+            ApnaOS's CLI demonstrates a fully functional kernel-level shell built from low-level primitives. With features like per-user command history, scrollback navigation, multi-user support, and comprehensive file/process management, it serves as both a practical interface and an educational example of systems programming. The modular design allows easy extension while maintaining clarity for learning purposes.
           </p>
         </section>
 

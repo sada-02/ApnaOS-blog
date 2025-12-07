@@ -471,9 +471,16 @@
             </ul>
             </ul>
 
+        <!-- Syscall Test Programs -->
+        <section>
+          <h2>3. Syscall Test Programs</h2>
+          <p>ApnaOS includes simplesys (single fork) and multisys (multiple forks) test programs that demonstrate fork/wait syscalls with VGA screen output.</p>
+          <p><strong>Usage:</strong> <code>process simplesys</code> or <code>process multisys</code>, then <code>process start</code></p>
+        </section>
+
         <!-- Future Directions -->
         <section>
-          <h2>3. Future Directions</h2>
+          <h2>4. Future Directions</h2>
           <ul>
             <li><strong>Argument validation:</strong> Securely copy arguments from user space and validate pointers.</li>
             <li><strong>Syscall table:</strong> Implement a dynamic dispatch table indexed by syscall numbers.</li>
@@ -485,10 +492,9 @@
 
         <!-- Conclusion -->
         <section>
-          <h2>4. Conclusion</h2>
+          <h2>5. Conclusion</h2>
           <p>
-            This deep dive into ApnaOS’s system call layer illustrates how user-space programs request kernel services, how the kernel safely switches context,
-            and manages process lifecycle events like fork, wait, and exit. These primitives form the backbone for building higher-level OS features.
+            ApnaOS's system call interface provides a complete implementation of process management primitives including fork, wait, yield, and exit. These syscalls enable process creation, hierarchical process trees, inter-process communication, and proper resource cleanup. The accompanying test programs demonstrate real-world usage while validating correctness, making this a robust foundation for building higher-level OS features.
           </p>
         </section>
 

@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Building a Multi-User System | ApnaOS Blog</title>
+  <link rel="stylesheet" href="../css/style.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+</head>
+<body>
+  <a href="../index.html" class="home-link">
+    <i class="fas fa-house"></i> Home
+  </a>
+
+  <div class="container">
+    <header class="site-header">
+      <h1>Implementing a Multi-User System with Authentication</h1>
+      <p class="post-meta">Posted on November 28, 2025</p>
+    </header>
+
+    <main>
+      <article class="blog-post">
+        <h2>Why Multi-User?</h2>
+        <p>
+          Most educational OSes skip user management entirely, but we wanted ApnaOS to feel like a real system. 
+          Multiple users mean isolated environments, access control, and proper security—core OS concepts worth learning!
+        </p>
+
+        <h2>User Structure Design</h2>
+        <p>We started with a simple user structure:</p>
+
+        <pre><code>typedef struct User {
+    uint32_t id;                    // Unique user ID (0 = root)
+    char username[32];              // Login name
+    char password_hash[64];         // Hashed password
+    Inode* home_dir;               // User's home directory
+    char history[MAX_HISTORY][256]; // Command history
+    int history_count;
+    bool active;                    // Is this slot used?
+} User;
+
+#define MAX_USERS 16
+static User users[MAX_USERS];
+static uint32_t current_user_id = 0;  // Start as root</code></pre>
+
+        <h2>Password Hashing</h2>
+        <p>
+          Storing plaintext passwords is a security nightmare. We implemented a simple hashing function:
+        </p>
+
+        <pre><code>uint32_t simple_hash(const char* str) {
+    uint32_t hash = 5381;
+    while (*str) {
+        hash = ((hash << 5) + hash) + (*str++);
+    }
+    return hash;
+}
+
+void hash_password(const char* password, char* output) {
+    uint32_t hash = simple_hash(password);
+    
+    // Add salt based on username
+    hash ^= simple_hash(users[current_user_id].username);
+    
+    // Convert to hex string
+    for (int i = 0; i < 8; i++) {
+        uint8_t nibble = (hash >> (28 - i*4)) & 0xF;
+        output[i] = nibble < 10 ? '0' + nibble : 'A' + (nibble - 10);
+    }
+    output[8] = '\0';
+}</code></pre>
+
+        <div class="info-message">
+          <i class="fas fa-shield-alt"></i>
+          <strong>Security note:</strong> This is a simple hash for educational purposes. Real systems use bcrypt, 
+          scrypt, or Argon2 with proper salting and key stretching!
+        </div>
+
+        <h2>User Management Commands</h2>
+
+        <h3>adduser - Create New User</h3>
+        <pre><code>void cmd_adduser(const char* username) {
+    // Only root can add users
+    if (current_user_id != 0) {
+        print("Error: Only root can add users\n");
+        return;
+    }
+    
+    // Find free slot
+    int slot = -1;
+    for (int i = 0; i < MAX_USERS; i++) {
+        if (!users[i].active) {
+            slot = i;
+            break;
+        }
+    }
+    
+    if (slot == -1) {
+        print("Error: Maximum users reached\n");
+        return;
+    }
+    
+    // Get password
+    print("Enter password for ");
+    print(username);
+    print(": ");
+    char password[64];
+    read_password(password);  // Hidden input
+    
+    // Create user
+    users[slot].id = slot;
+    strcpy(users[slot].username, username);
+    hash_password(password, users[slot].password_hash);
+    users[slot].active = true;
+    users[slot].history_count = 0;
+    
+    // Create home directory
+    char home_path[128];
+    sprintf(home_path, "/home/%s", username);
+    users[slot].home_dir = fs_create_directory(home_path, slot);
+    
+    print("User ");
+    print(username);
+    print(" created successfully\n");
+}</code></pre>
+
+        <h3>switchuser - Switch Active User</h3>
+        <pre><code>void cmd_switchuser(const char* username) {
+    // Find user
+    int user_id = -1;
+    for (int i = 0; i < MAX_USERS; i++) {
+        if (users[i].active && strcmp(users[i].username, username) == 0) {
+            user_id = i;
+            break;
+        }
+    }
+    
+    if (user_id == -1) {
+        print("Error: User not found\n");
+        return;
+    }
+    
+    // Authenticate
+    print("Password for ");
+    print(username);
+    print(": ");
+    char password[64];
+    read_password(password);
+    
+    char hash[64];
+    // Temporarily set user context for salting
+    uint32_t old_user = current_user_id;
+    current_user_id = user_id;
+    hash_password(password, hash);
+    
+    if (strcmp(hash, users[user_id].password_hash) != 0) {
+        current_user_id = old_user;  // Restore
+        print("\nError: Incorrect password\n");
+        return;
+    }
+    
+    // Switch successful
+    current_user_id = user_id;
+    current_dir = users[user_id].home_dir;
+    
+    print("\nSwitched to user: ");
+    print(username);
+    print("\n");
+}</code></pre>
+
+        <h3>deluser - Delete User</h3>
+        <pre><code>void cmd_deluser(const char* username) {
+    if (current_user_id != 0) {
+        print("Error: Only root can delete users\n");
+        return;
+    }
+    
+    // Can't delete root
+    if (strcmp(username, "root") == 0) {
+        print("Error: Cannot delete root user\n");
+        return;
+    }
+    
+    // Find and delete user
+    for (int i = 0; i < MAX_USERS; i++) {
+        if (users[i].active && strcmp(users[i].username, username) == 0) {
+            users[i].active = false;
+            
+            // Delete home directory (future: recursive delete)
+            // fs_delete_directory(users[i].home_dir);
+            
+            print("User ");
+            print(username);
+            print(" deleted\n");
+            return;
+        }
+    }
+    
+    print("Error: User not found\n");
+}</code></pre>
+
+        <h3>whoami - Display Current User</h3>
+        <pre><code>void cmd_whoami() {
+    print(users[current_user_id].username);
+    print("\n");
+}</code></pre>
+
+        <h2>Per-User Command History</h2>
+        <p>
+          Each user gets their own command history, isolated from other users:
+        </p>
+
+        <pre><code>void add_to_history(const char* command) {
+    User* user = &users[current_user_id];
+    
+    // Don't add duplicates of last command
+    if (user->history_count > 0 && 
+        strcmp(user->history[user->history_count - 1], command) == 0) {
+        return;
+    }
+    
+    // Shift history if full
+    if (user->history_count >= MAX_HISTORY) {
+        for (int i = 0; i < MAX_HISTORY - 1; i++) {
+            strcpy(user->history[i], user->history[i + 1]);
+        }
+        user->history_count = MAX_HISTORY - 1;
+    }
+    
+    // Add new command
+    strcpy(user->history[user->history_count++], command);
+}
+
+void history_previous() {
+    User* user = &users[current_user_id];
+    if (history_index > 0) {
+        history_index--;
+        strcpy(input_buffer, user->history[history_index]);
+        redraw_input_line();
+    }
+}</code></pre>
+
+        <h2>File Ownership and Permissions</h2>
+        <p>
+          We extended the filesystem to respect user ownership:
+        </p>
+
+        <pre><code>bool can_modify_file(Inode* file) {
+    // Root can do anything
+    if (current_user_id == 0) return true;
+    
+    // Owner can modify their files
+    return (file->owner_id == current_user_id);
+}
+
+void cmd_write(const char* path, const char* content) {
+    Inode* file = fs_resolve_path(path);
+    
+    if (file && !can_modify_file(file)) {
+        print("Error: Permission denied\n");
+        return;
+    }
+    
+    if (!file) {
+        // Create new file owned by current user
+        file = fs_create_file(path, current_user_id);
+    }
+    
+    // Write content
+    file->size = strlen(content);
+    strcpy(file->data, content);
+}</code></pre>
+
+        <h2>System Initialization</h2>
+        <p>
+          During boot, we initialize the root user:
+        </p>
+
+        <pre><code>void init_user_system() {
+    // Create root user (no password for simplicity)
+    users[0].id = 0;
+    strcpy(users[0].username, "root");
+    strcpy(users[0].password_hash, "");  // Empty = no password
+    users[0].active = true;
+    users[0].history_count = 0;
+    
+    // Root's home is /home/root
+    users[0].home_dir = fs_create_directory("/home/root", 0);
+    
+    current_user_id = 0;
+    current_dir = users[0].home_dir;
+    
+    print("Multi-user system initialized\n");
+    print("Current user: root\n");
+}</code></pre>
+
+        <h2>The Prompt Shows Current User</h2>
+        <pre><code>void print_prompt() {
+    // Show username
+    print(users[current_user_id].username);
+    print("@apnaos:");
+    
+    // Show current directory
+    print_current_path();
+    
+    // Different symbol for root
+    print(current_user_id == 0 ? "# " : "$ ");
+}</code></pre>
+
+        <h3>Example Session:</h3>
+        <pre><code>root@apnaos:/home/root# adduser alice
+Enter password for alice: ********
+User alice created successfully
+
+root@apnaos:/home/root# switchuser alice
+Password for alice: ********
+Switched to user: alice
+
+alice@apnaos:~$ pwd
+/home/alice
+
+alice@apnaos:~$ whoami
+alice
+
+alice@apnaos:~$ write myfile.txt "Hello from Alice!"
+File created
+
+alice@apnaos:~$ switchuser root
+Password for root: 
+Switched to user: root
+
+root@apnaos:/home/alice# cat myfile.txt
+Hello from Alice!</code></pre>
+
+        <h2>Challenges We Faced</h2>
+        <ul>
+          <li><strong>Password input:</strong> Had to hide characters while typing (replace with '*')</li>
+          <li><strong>Context switching:</strong> Changing current_dir when switching users caused bugs</li>
+          <li><strong>History isolation:</strong> Initially all users shared one history buffer!</li>
+          <li><strong>Root access:</strong> Deciding what root can do vs. regular users</li>
+        </ul>
+
+        <h2>Security Considerations</h2>
+        <div class="warning-message">
+          <i class="fas fa-exclamation-triangle"></i>
+          <strong>Educational disclaimer:</strong> Our implementation is simplified for learning. Production systems need:
+          <ul>
+            <li>Proper cryptographic hashing (bcrypt/scrypt)</li>
+            <li>Salt stored per-user (not based on username)</li>
+            <li>Rate limiting on login attempts</li>
+            <li>Audit logging of privileged operations</li>
+            <li>Process isolation (each user's processes can't access others')</li>
+          </ul>
+        </div>
+
+        <h2>What's Next?</h2>
+        <p>User management opens up many possibilities:</p>
+        <ul>
+          <li>User groups and group permissions</li>
+          <li>Setuid/setgid bits for privileged programs</li>
+          <li>Process ownership (fork inherits user)</li>
+          <li>Resource quotas per user (disk space, CPU time)</li>
+          <li>User login sessions with tty allocation</li>
+        </ul>
+
+        <p class="post-navigation">
+          <a href="filesystem-journey.html">← Previous: Building a Filesystem</a>
+          <a href="../index.html">Back to Home →</a>
+        </p>
+      </article>
+    </main>
+
+    <footer>© 2025 ApnaOS Team</footer>
+  </div>
+</body>
+</html>

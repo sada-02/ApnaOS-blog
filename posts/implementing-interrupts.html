@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Implementing Interrupts & IDT | ApnaOS Blog</title>
+  <link rel="stylesheet" href="../css/style.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+</head>
+<body>
+  <a href="../index.html" class="home-link">
+    <i class="fas fa-house"></i> Home
+  </a>
+
+  <div class="container">
+    <header class="site-header">
+      <h1>Implementing Interrupts & the IDT</h1>
+      <p class="post-meta">Posted on May 15, 2025</p>
+    </header>
+
+    <main>
+      <article class="blog-post">
+        <h2>The Challenge</h2>
+        <p>
+          After getting basic kernel output working, the next major milestone was handling interrupts. Without interrupts, 
+          our OS couldn't respond to keyboard input, timer ticks, or hardware events. Everything needed to be polled, 
+          which is both inefficient and limiting.
+        </p>
+
+        <h2>Understanding the IDT</h2>
+        <p>
+          The Interrupt Descriptor Table (IDT) is x86's mechanism for mapping interrupt numbers to handler functions. 
+          Think of it as a lookup table: when interrupt 33 fires (keyboard), the CPU looks up entry 33 in the IDT 
+          and jumps to that address.
+        </p>
+
+        <h3>The IDT Entry Structure</h3>
+        <pre><code>struct idt_entry {
+    uint16_t base_low;    // Lower 16 bits of handler address
+    uint16_t sel;         // Kernel code segment (0x08)
+    uint8_t always0;      // Reserved, must be 0
+    uint8_t flags;        // Type and privilege level (0x8E)
+    uint16_t base_high;   // Upper 16 bits of handler address
+} __attribute__((packed));</code></pre>
+
+        <p>The <code>packed</code> attribute is crucial—it tells GCC not to add padding bytes, ensuring the structure matches what the CPU expects.</p>
+
+        <h2>Setting Up the IDT</h2>
+        <p>We created 256 entries (one for each possible interrupt) and installed handlers for the first 32 (CPU exceptions):</p>
+
+        <pre><code>void idt_install() {
+    // Map all 32 CPU exceptions to our stub
+    for (int i = 0; i < 32; i++) {
+        idt_set_gate(i, (uint32_t)isr_stub, 0x08, 0x8E);
+    }
+    
+    // Tell CPU where our IDT is
+    idtp.limit = (sizeof(struct idt_entry) * 256) - 1;
+    idtp.base = (uint32_t)&idt;
+    idt_load((uint32_t)&idtp);  // Assembly wrapper for lidt
+}</code></pre>
+
+        <h2>The Assembly Stub Challenge</h2>
+        <p>
+          Here's where it got tricky. When an interrupt fires, the CPU pushes some registers (like error code and return address) 
+          but not all of them. We needed to save the complete CPU state before calling our C handler.
+        </p>
+
+        <pre><code>; exceptions.asm
+extern isr_handler
+
+isr_stub:
+    pusha           ; Push all general-purpose registers
+    push ds
+    push es
+    push fs
+    push gs
+    
+    mov ax, 0x10    ; Kernel data segment
+    mov ds, ax
+    mov es, ax
+    
+    call isr_handler
+    
+    pop gs
+    pop fs
+    pop es
+    pop ds
+    popa
+    add esp, 8      ; Clean up error code and interrupt number
+    iret            ; Return from interrupt</code></pre>
+
+        <h2>Remapping the PIC</h2>
+        <p>
+          The Programmable Interrupt Controller (PIC) maps hardware interrupts (IRQs) to interrupt numbers. By default, 
+          IRQs 0-7 map to interrupts 8-15, which conflicts with CPU exceptions! We had to remap:
+        </p>
+
+        <pre><code>void remap_pic() {
+    // IRQ 0-7 → interrupts 32-39
+    // IRQ 8-15 → interrupts 40-47
+    outb(0x20, 0x11);  // Initialize master PIC
+    outb(0xA0, 0x11);  // Initialize slave PIC
+    
+    outb(0x21, 0x20);  // Master offset: 32
+    outb(0xA1, 0x28);  // Slave offset: 40
+    
+    outb(0x21, 0x04);  // Tell master about slave
+    outb(0xA1, 0x02);  // Tell slave its cascade identity
+    
+    outb(0x21, 0x01);  // 8086 mode
+    outb(0xA1, 0x01);
+    
+    outb(0x21, 0x0);   // Unmask all interrupts
+    outb(0xA1, 0x0);
+}</code></pre>
+
+        <h2>First Keyboard Interrupt!</h2>
+        <p>
+          The moment of truth came when we enabled interrupts (<code>sti</code>) and pressed a key. The screen printed 
+          "Keyboard interrupt received!" We could now read scancodes from port 0x60 and translate them to characters.
+        </p>
+
+        <div class="success-message">
+          <i class="fas fa-check-circle"></i>
+          <strong>Lesson learned:</strong> Interrupts are the foundation of responsive OS behavior. Everything from 
+          keyboard input to timer-based scheduling depends on this mechanism working correctly.
+        </div>
+
+        <h2>What's Next?</h2>
+        <p>
+          With interrupts working, we could finally implement:
+        </p>
+        <ul>
+          <li>A proper keyboard driver with scancode translation</li>
+          <li>Timer-based scheduling for multitasking</li>
+          <li>System calls via software interrupts (int 0x80)</li>
+          <li>Page fault handling for virtual memory</li>
+        </ul>
+
+        <p class="post-navigation">
+          <a href="initial-boot.html">← Previous: Initial Boot Success</a>
+          <a href="keyboard-driver.html">Next: Building a Keyboard Driver →</a>
+        </p>
+      </article>
+    </main>
+
+    <footer>© 2025 ApnaOS Team</footer>
+  </div>
+</body>
+</html>

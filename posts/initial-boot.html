@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Initial Boot Success | ApnaOS Blog</title>
+  <link rel="stylesheet" href="../css/style.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+</head>
+<body>
+  <a href="../index.html" class="home-link">
+    <i class="fas fa-house"></i> Home
+  </a>
+
+  <div class="container">
+    <header class="site-header">
+      <h1>Initial Boot Success & Kernel Print</h1>
+      <p class="post-meta">Posted on April 18, 2025</p>
+    </header>
+
+    <main>
+      <article class="blog-post">
+        <h2>The Beginning</h2>
+        <p>
+          Every OS journey starts with a single boot. After weeks of reading OSDev wiki pages, watching tutorials, 
+          and staring at hex dumps, we finally saw those magical words on the screen: "ApnaOS Kernel Loaded!"
+        </p>
+
+        <h2>The Multiboot Challenge</h2>
+        <p>
+          Getting GRUB to recognize and load our kernel was harder than expected. The Multiboot header has to be 
+          in the first 8 KB of the kernel binary, properly aligned, with a magic number that GRUB looks for:
+        </p>
+
+        <pre><code>; boot.asm
+MULTIBOOT_MAGIC    equ 0x1BADB002
+MULTIBOOT_FLAGS    equ 0x00000003
+MULTIBOOT_CHECKSUM equ -(MULTIBOOT_MAGIC + MULTIBOOT_FLAGS)
+
+section .multiboot
+align 4
+    dd MULTIBOOT_MAGIC
+    dd MULTIBOOT_FLAGS
+    dd MULTIBOOT_CHECKSUM
+
+section .text
+global _start
+extern kernel_main
+
+_start:
+    mov esp, stack_top    ; Set up stack
+    push ebx              ; Push Multiboot info pointer
+    push eax              ; Push Multiboot magic number
+    call kernel_main      ; Jump to C code
+    
+    cli                   ; Disable interrupts
+.hang:
+    hlt                   ; Halt CPU
+    jmp .hang
+
+section .bss
+align 16
+stack_bottom:
+    resb 16384            ; 16 KB stack
+stack_top:</code></pre>
+
+        <h2>The Linker Script Nightmare</h2>
+        <p>
+          This was the hardest part. The linker script tells the compiler how to arrange our code in memory. 
+          GRUB loads the kernel at 1 MB (0x100000), and we needed to make sure the Multiboot header came first:
+        </p>
+
+        <pre><code>/* linker.ld */
+ENTRY(_start)
+
+SECTIONS {
+    . = 0x100000;           /* Load kernel at 1 MB */
+    
+    .text ALIGN(4K) : {
+        *(.multiboot)       /* Multiboot header first! */
+        *(.text*)           /* Code sections */
+    }
+    
+    .rodata ALIGN(4K) : {
+        *(.rodata*)         /* Read-only data */
+    }
+    
+    .data ALIGN(4K) : {
+        *(.data*)           /* Initialized data */
+    }
+    
+    .bss ALIGN(4K) : {
+        *(COMMON)
+        *(.bss*)            /* Uninitialized data */
+    }
+}</code></pre>
+
+        <h2>First Kernel Code</h2>
+        <p>
+          Once booting worked, we wrote our first C function to print to VGA text mode:
+        </p>
+
+        <pre><code>// kernel.c
+#include &lt;stdint.h&gt;
+
+#define VGA_ADDRESS 0xB8000
+#define VGA_WIDTH 80
+#define VGA_HEIGHT 25
+
+uint16_t* vga_buffer = (uint16_t*)VGA_ADDRESS;
+int cursor_x = 0, cursor_y = 0;
+
+void putchar(char c) {
+    if (c == '\n') {
+        cursor_x = 0;
+        cursor_y++;
+        return;
+    }
+    
+    uint16_t attribute = 0x0F00;  // White on black
+    vga_buffer[cursor_y * VGA_WIDTH + cursor_x] = attribute | c;
+    
+    cursor_x++;
+    if (cursor_x >= VGA_WIDTH) {
+        cursor_x = 0;
+        cursor_y++;
+    }
+}
+
+void print(const char* str) {
+    while (*str) {
+        putchar(*str++);
+    }
+}
+
+void kernel_main() {
+    print("ApnaOS Kernel Loaded!\n");
+    print("Welcome to our custom operating system.\n");
+    
+    // Infinite loop
+    while (1) {
+        __asm__ volatile("hlt");
+    }
+}</code></pre>
+
+        <h2>The Makefile</h2>
+        <p>
+          Compiling everything together required a careful Makefile:
+        </p>
+
+        <pre><code>AS = nasm
+CC = gcc
+LD = ld
+
+ASFLAGS = -f elf32
+CFLAGS = -m32 -c -ffreestanding -O2 -Wall -Wextra
+LDFLAGS = -m elf_i386 -T linker.ld
+
+OBJECTS = boot.o kernel.o
+
+all: apnaos.iso
+
+boot.o: boot.asm
+	$(AS) $(ASFLAGS) boot.asm -o boot.o
+
+kernel.o: kernel.c
+	$(CC) $(CFLAGS) kernel.c -o kernel.o
+
+apnaos.bin: $(OBJECTS)
+	$(LD) $(LDFLAGS) $(OBJECTS) -o apnaos.bin
+
+apnaos.iso: apnaos.bin
+	cp apnaos.bin iso/boot/
+	cp grub.cfg iso/boot/grub/
+	grub-mkrescue -o apnaos.iso iso/
+
+run: apnaos.iso
+	qemu-system-i386 -cdrom apnaos.iso
+
+clean:
+	rm -f *.o apnaos.bin apnaos.iso</code></pre>
+
+        <h2>The Eureka Moment</h2>
+        <p>
+          After fixing compilation errors, linker issues, and GRUB configuration problems, we ran:
+        </p>
+
+        <pre><code>$ make run</code></pre>
+
+        <p>
+          QEMU opened, GRUB loaded, and there it was—our kernel running! Two simple lines of text, but it represented 
+          hours of debugging, reading documentation, and understanding how computers really boot.
+        </p>
+
+        <div class="success-message">
+          <i class="fas fa-check-circle"></i>
+          <strong>Lesson learned:</strong> Getting the first "Hello World" is the hardest part of OS development. 
+          Everything after this builds on this foundation.
+        </div>
+
+        <h2>Common Pitfalls We Hit</h2>
+        <ul>
+          <li><strong>Wrong architecture flags:</strong> Forgot <code>-m32</code> and compiled 64-bit code</li>
+          <li><strong>Stack not aligned:</strong> Caused random crashes until we added <code>align 16</code></li>
+          <li><strong>Multiboot header missing:</strong> GRUB couldn't find our kernel (needed <code>*(.multiboot)</code> first)</li>
+          <li><strong>No infinite loop:</strong> Kernel returned and jumped to random memory!</li>
+        </ul>
+
+        <h2>What's Next?</h2>
+        <p>
+          With basic output working, the next steps are:
+        </p>
+        <ul>
+          <li>Set up Global Descriptor Table (GDT) for memory segmentation</li>
+          <li>Implement Interrupt Descriptor Table (IDT) for handling interrupts</li>
+          <li>Write a keyboard driver for user input</li>
+          <li>Add memory management (paging and heap)</li>
+          <li>Build a simple shell/CLI</li>
+        </ul>
+
+        <h2>Resources That Helped</h2>
+        <ul>
+          <li><a href="https://wiki.osdev.org/Bare_Bones" target="_blank">OSDev Wiki - Bare Bones</a></li>
+          <li><a href="https://www.gnu.org/software/grub/manual/multiboot/multiboot.html" target="_blank">Multiboot Specification</a></li>
+          <li><a href="https://github.com/cfenollosa/os-tutorial" target="_blank">OS Tutorial by Carlos Fenollosa</a></li>
+        </ul>
+
+        <p class="post-navigation">
+          <a href="implementing-interrupts.html">Next: Implementing Interrupts →</a>
+        </p>
+      </article>
+    </main>
+
+    <footer>© 2025 ApnaOS Team</footer>
+  </div>
+</body>
+</html>

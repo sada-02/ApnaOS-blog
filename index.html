@@ -32,19 +32,37 @@
       <main>
         <section id="project-description">
           <h2>About ApnaOS</h2>
-          <p>ApnaOS is a learning-oriented operating system written entirely in C and assembly. It demonstrates how fundamental OS components work together, with minimal dependencies and clear structure.</p>
+          <p>ApnaOS is a learning-oriented operating system written entirely in C and x86 assembly. It demonstrates how fundamental OS components work together, with minimal dependencies and clear structure. Built from scratch with educational intent, ApnaOS provides hands-on experience with low-level system programming.</p>
+          
+          <h3>Core Features</h3>
           <ul>
-            <li><strong>Bootloader & Kernel Setup:</strong> Loaded via GRUB, initializes GDT, switches to protected mode, and jumps into the kernel.</li>
-            <li><strong>Kernel Architecture:</strong> Modular codebase with abstraction for memory, processes, and interrupt handling.</li>
-            <li><strong>Process Management:</strong> Preemptive round-robin scheduler with PCB, context switching, and task isolation.</li>
-            <li><strong>System Calls:</strong> Uses software interrupts to safely invoke kernel services from user space.</li>
-            <li><strong>Interrupts:</strong> Custom IDT and IRQ remapping; ISRs and IRQ handlers for timer, keyboard, and faults.</li>
-            <li><strong>Memory Management:</strong> Paging-based memory management with support for allocation, mapping, and CR3 switching.</li>
-            <li><strong>File System:</strong> Minimal VFS layer supporting hierarchical directories and flat file operations.</li>
-            <li><strong>CLI Interface:</strong> A basic shell to execute commands, invoke syscalls, and inspect system state.</li>
-            <li><strong>Debugging & Diagnostics:</strong> Trap handlers, stack dumps, and serial output for development insights.</li>
+            <li><strong>Bootloader & Kernel Setup:</strong> GRUB-based Multiboot bootloader initializes GDT, IDT, switches to protected mode, and jumps into kernel space.</li>
+            <li><strong>Kernel Architecture:</strong> Modular C codebase with clean abstractions for memory, processes, filesystem, and interrupt handling.</li>
+            <li><strong>Process Management:</strong> Round-robin scheduler with Process Control Blocks (PCB), context switching, and support for fork/wait syscalls.</li>
+            <li><strong>System Calls:</strong> Software interrupt-based syscall interface (fork, wait, yield, exit) for safe kernel service invocation.</li>
+            <li><strong>Interrupt Handling:</strong> Custom IDT with ISRs, IRQ remapping via PIC, timer interrupts (PIT at 100Hz), and keyboard interrupt handling.</li>
+            <li><strong>Memory Management:</strong> Paging-based virtual memory with page tables, heap allocation, and per-process memory isolation.</li>
+            <li><strong>File System:</strong> Inode-based filesystem with hierarchical directories, file operations (create, read, write, delete), and user ownership.</li>
+            <li><strong>Multi-User System:</strong> Password-protected user spaces with isolated file systems, authentication using password hashing, and root user support.</li>
+            <li><strong>VGA Text Mode:</strong> 80x25 character display with scrollback buffer (1000 lines), navigation via Page Up/Down/ESC keys.</li>
+            <li><strong>Command History:</strong> Per-user command history (20 commands) with up/down arrow navigation across sessions.</li>
+            <li><strong>CLI Interface:</strong> Interactive shell supporting file/directory operations, process management, user management, and system commands.</li>
+            <li><strong>Path Traversal:</strong> Full hierarchical path support with cd path/to/dir, cd .., and cd ~ commands.</li>
+            <li><strong>Debugging & Diagnostics:</strong> Serial output for debugging, exception handlers, and comprehensive error reporting.</li>
           </ul>
-          <p>Each module is self-contained and simple enough for step-by-step walkthroughs, making ApnaOS ideal for OS design education and kernel hacking.</p>
+          
+          <h3>Recent Enhancements</h3>
+          <ul>
+            <li>Implemented scrollback buffer with Page Up/Down navigation for viewing output beyond screen size</li>
+            <li>Added multi-user authentication system with separate file spaces per user</li>
+            <li>Per-user command history context switching when changing users</li>
+            <li>Test processes for demonstrating fork/wait syscalls (simplesys, multisys)</li>
+            <li>Timer-based shutdown with 10-second countdown on exit command</li>
+            <li>Enhanced keyboard handling with extended scancode support</li>
+            <li>Help command with comprehensive documentation of all available commands</li>
+          </ul>
+          
+          <p>Each module is self-contained and documented with clear code examples, making ApnaOS ideal for learning OS internals, kernel development, and system programming concepts.</p>
         </section>
 
         <!-- Contributors -->

@@ -1,8 +1,38 @@
 [
     {
-      "url": "posts/post.html",
+      "url": "posts/initial-boot.html",
       "title": "Initial Boot Success & Kernel Print",
       "date": "April 18, 2025",
-      "excerpt": "After days of debugging GRUB and linking issues..."
+      "excerpt": "After weeks of reading OSDev wiki pages and staring at hex dumps, we finally saw those magical words: 'ApnaOS Kernel Loaded!' Getting GRUB to recognize our kernel was harder than expected..."
+    },
+    {
+      "url": "posts/implementing-interrupts.html",
+      "title": "Implementing Interrupts & the IDT",
+      "date": "May 15, 2025",
+      "excerpt": "Without interrupts, our OS couldn't respond to keyboard input, timer ticks, or hardware events. Learn how we set up the Interrupt Descriptor Table, remapped the PIC, and handled our first keyboard interrupt..."
+    },
+    {
+      "url": "posts/keyboard-driver.html",
+      "title": "Building a Keyboard Driver from Scratch",
+      "date": "June 3, 2025",
+      "excerpt": "Translating raw scancodes to characters turned out to be more complex than expected! Extended scancodes, modifier keys, and arrow key navigation—here's how we built a full-featured keyboard driver..."
+    },
+    {
+      "url": "posts/process-management.html",
+      "title": "Implementing Process Management & Fork",
+      "date": "July 22, 2025",
+      "excerpt": "A single-tasking OS is boring! We implemented PCBs, a round-robin scheduler, and the infamous fork() system call. Learn how we made both parent and child return from the same function with different values..."
+    },
+    {
+      "url": "posts/filesystem-journey.html",
+      "title": "Building a Filesystem from Scratch",
+      "date": "September 10, 2025",
+      "excerpt": "Processes are cool, but without persistent storage, everything disappears on reboot. We built an inode-based filesystem with directories, path traversal, and multi-user file ownership..."
+    },
+    {
+      "url": "posts/multi-user-system.html",
+      "title": "Building a Multi-User System with Authentication",
+      "date": "November 28, 2025",
+      "excerpt": "Multiple users mean isolated environments, access control, and proper security. Learn how we implemented user authentication, password hashing, per-user command history, and file permissions..."
     }
 ]
