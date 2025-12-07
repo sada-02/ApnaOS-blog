@@ -750,28 +750,6 @@ extern void multisys(void);</code></pre>
             <li><strong>Shutdown:</strong> Disables interrupts, prints termination message, halts CPU forever</li>
           </ol>
 
-          <h4>Debug Output Sequence:</h4>
-          <pre><code>DEBUG: Entering kernel_main.
-Debug: line 1
-...
-Debug: line 30
-DEBUG: Kernel memory initialized.
-DEBUG: Memory initialized.
-DEBUG: Disk formatted and file system reset.
-DEBUG: File system created.
-DEBUG: Filesystem initialized.
-DEBUG: User system initialized with root user.
-DEBUG: User system initialized.
-DEBUG: GDT installed.
-DEBUG: IDT and IRQ handlers installed.
-DEBUG: Keyboard initialized. Press keys!
-DEBUG: System calls initialized
-DEBUG: System calls initialized.
-DEBUG: Process queues initialized.
-DEBUG: Process management system initialized.
-DEBUG: Process management initialized.
-
-root@/> _  [Interactive prompt appears]</code></pre>
             </section>
         <!-- Conclusion -->
         <section>
@@ -780,7 +758,7 @@ root@/> _  [Interactive prompt appears]</code></pre>
             ApnaOS has evolved from a basic kernel into a fully functional operating system demonstrating core OS concepts. The kernel successfully handles:
           </p>
           
-          <h4>✅ Implemented Features:</h4>
+          <h4>Implemented Features:</h4>
           <ul>
             <li><strong>Multiboot bootloader:</strong> GRUB-based boot with protected mode transition</li>
             <li><strong>Memory management:</strong> Paging with page tables, kernel heap allocation</li>
@@ -800,19 +778,6 @@ root@/> _  [Interactive prompt appears]</code></pre>
             <li><strong>Test programs:</strong> simplesys (single fork) and multisys (multiple forks) demonstrating syscalls</li>
           </ul>
 
-          <h4>🎯 Future Enhancements:</h4>
-          <ul>
-            <li><strong>Copy-on-write:</strong> Optimize fork by sharing pages until write occurs</li>
-            <li><strong>Persistent storage:</strong> Extend filesystem to real disk or virtual disk image</li>
-            <li><strong>exec syscall:</strong> Load and execute new programs (replacing current process)</li>
-            <li><strong>Pipes & redirection:</strong> Implement | and > operators for command chaining</li>
-            <li><strong>User-mode processes:</strong> Run processes in ring 3 with proper privilege separation</li>
-            <li><strong>IPC mechanisms:</strong> Message queues, shared memory, semaphores</li>
-            <li><strong>Dynamic linking:</strong> Load shared libraries at runtime</li>
-            <li><strong>Networking stack:</strong> TCP/IP implementation for network communication</li>
-            <li><strong>Graphics mode:</strong> VESA/framebuffer support beyond VGA text mode</li>
-          </ul>
-
           <p>
             The kernel demonstrates a complete OS foundation suitable for education and further development. Each component is well-documented, modular, and extensible, making it an excellent learning resource for operating system concepts.
           </p>
@@ -827,3 +792,4 @@ root@/> _  [Interactive prompt appears]</code></pre>
   </div>
 </body>
 </html>
+
