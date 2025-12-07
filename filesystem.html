@@ -398,31 +398,18 @@ int create_user(const char* username, const char* password) {
         <section>
           <h2>11. Current Implementation Status</h2>
           <ul>
-            <li><strong>✓ Multi-user spaces:</strong> Each user has isolated file storage</li>
-            <li><strong>✓ Access control:</strong> Owner checks on all file operations</li>
-            <li><strong>✓ Hierarchical directories:</strong> Full path traversal with cd path/to/dir</li>
-            <li><strong>✓ Parent directory navigation:</strong> cd .. support</li>
-            <li><strong>✓ Home directory:</strong> cd ~ returns to user's home</li>
-            <li><strong>✓ Root access:</strong> Root user can access all files</li>
-            <li><strong>✓ Password protection:</strong> Secure user authentication</li>
+            <li><strong>Multi-user spaces:</strong> Each user has isolated file storage</li>
+            <li><strong>Access control:</strong> Owner checks on all file operations</li>
+            <li><strong>Hierarchical directories:</strong> Full path traversal with cd path/to/dir</li>
+            <li><strong>Parent directory navigation:</strong> cd .. support</li>
+            <li><strong>Home directory:</strong> cd ~ returns to user's home</li>
+            <li><strong>Root access:</strong> Root user can access all files</li>
+            <li><strong>Password protection:</strong> Secure user authentication</li>
           </ul>
         </section>
 
         <section>
-          <h2>12. Future Directions</h2>
-          <ul>
-            <li>Support for >2 direct blocks via indirect blocks for larger files</li>
-            <li>File metadata (timestamps, creation date, last modified)</li>
-            <li>Permission modes (read, write, execute) similar to Unix</li>
-            <li>Persistent storage backing to real disk or virtual disk image</li>
-            <li>Journaling or copy-on-write for crash safety</li>
-            <li>Symbolic links and hard links</li>
-            <li>File system mounting and unmounting</li>
-          </ul>
-        </section>
-
-        <section>
-          <h2>13. Conclusion</h2>
+          <h2>Conclusion</h2>
           <p>
             The ApnaOS filesystem has evolved from a simple in-memory VFS to a sophisticated multi-user system with hierarchical directories, access control, and user isolation. It demonstrates core filesystem concepts including inode management, block allocation, directory services, and user authentication—all while maintaining educational clarity. The modular design allows easy extension to more advanced features as the OS grows.
           </p>
@@ -436,3 +423,4 @@ int create_user(const char* username, const char* password) {
   </div>
 </body>
 </html>
+
