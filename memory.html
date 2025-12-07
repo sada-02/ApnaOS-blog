@@ -237,46 +237,25 @@ void copy_memory(void* dest, void* src, size_t size) {
 
           <h4>Advantages:</h4>
           <ul>
-            <li>✅ <strong>True deallocation:</strong> Freed memory is immediately reusable</li>
-            <li>✅ <strong>No external fragmentation:</strong> All allocations are page-aligned</li>
-            <li>✅ <strong>O(n) allocation:</strong> Worst-case scans all pages, but next-fit reduces average case</li>
-            <li>✅ <strong>O(k) deallocation:</strong> Only scans continuation pages in same allocation</li>
-            <li>✅ <strong>Simple metadata:</strong> Only 4 KB overhead (0.02% of 16 MB heap)</li>
+            <li><strong>True deallocation:</strong> Freed memory is immediately reusable</li>
+            <li><strong>No external fragmentation:</strong> All allocations are page-aligned</li>
+            <li><strong>O(n) allocation:</strong> Worst-case scans all pages, but next-fit reduces average case</li>
+            <li><strong>O(k) deallocation:</strong> Only scans continuation pages in same allocation</li>
+            <li><strong>Simple metadata:</strong> Only 4 KB overhead (0.02% of 16 MB heap)</li>
           </ul>
 
           <h4>Tradeoffs:</h4>
           <ul>
-            <li>⚠️ <strong>Internal fragmentation:</strong> Small allocations waste space (100 bytes → 4096 bytes)</li>
-            <li>⚠️ <strong>No coalescing:</strong> Adjacent free pages not merged, could fragment over time</li>
-            <li>⚠️ <strong>Linear search:</strong> Allocation time grows with heap size (acceptable for 4096 pages)</li>
-            <li>⚠️ <strong>Fixed heap size:</strong> Cannot grow beyond 16 MB</li>
-          </ul>
-
-          <h4>Optimization Opportunities:</h4>
-          <ul>
-            <li><strong>Free list:</strong> Maintain linked list of free page ranges for O(1) best-case allocation</li>
-            <li><strong>Buddy allocator:</strong> Split/merge power-of-two blocks to reduce fragmentation</li>
-            <li><strong>Slab allocator:</strong> Pre-allocate pools for common sizes (PCBs, file descriptors)</li>
-            <li><strong>Bitmap search:</strong> Use bit manipulation to find contiguous free pages faster</li>
-          </ul>
-        </section>
-
-        <!-- Future Directions -->
-        <section>
-          <h2>4. Future Enhancements</h2>
-          <ul>
-            <li><strong>Physical frame allocator:</strong> Track all physical RAM, not just kernel heap</li>
-            <li><strong>Virtual memory:</strong> Map pages on demand, support user-space memory isolation</li>
-            <li><strong>Copy-on-write (COW):</strong> Share pages between processes until write occurs</li>
-            <li><strong>Demand paging:</strong> Swap pages to disk under memory pressure</li>
-            <li><strong>Memory-mapped I/O:</strong> Map device registers into virtual address space</li>
-            <li><strong>NUMA awareness:</strong> Optimize allocations for multi-processor systems</li>
+            <li><strong>Internal fragmentation:</strong> Small allocations waste space (100 bytes → 4096 bytes)</li>
+            <li><strong>No coalescing:</strong> Adjacent free pages not merged, could fragment over time</li>
+            <li><strong>Linear search:</strong> Allocation time grows with heap size (acceptable for 4096 pages)</li>
+            <li><strong>Fixed heap size:</strong> Cannot grow beyond 16 MB</li>
           </ul>
         </section>
 
         <!-- Conclusion -->
         <section>
-          <h2>5. Conclusion</h2>
+          <h2>Conclusion</h2>
           <p>
             ApnaOS's page-based allocator balances simplicity with essential features: efficient allocation, true deallocation, and alignment 
             guarantees. While internal fragmentation and linear search present limitations, the design provides a solid foundation for kernel 
@@ -297,3 +276,4 @@ void copy_memory(void* dest, void* src, size_t size) {
   </div>
 </body>
 </html>
+
